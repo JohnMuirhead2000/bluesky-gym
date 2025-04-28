@@ -19,11 +19,12 @@ ALTITUDE = 350 # In FL
 # Aircraft parameters
 AC_SPD = 150
 AC_TYPE = "A320"
-ACTOR = "KL001"
+ACTOR = "KL001" # this is OUR aircraft
 
 # Conversion factors
 NM2KM = 1.852
-MpS2Kt = 1.94384
+MpS2Kt = 1.94384 # This 'conversion factor' is used when calculating the horizontal speed
+VMpS2Kt = 1.94384 # TODO invesitgate if this is how we should use this
 FL2M = 30.48
 
 INTRUSION_DISTANCE = 5 # NM
@@ -35,6 +36,7 @@ DRIFT_PENALTY = -0.1
 INTRUSION_PENALTY = -1
 D_HEADING = 22.5 # deg
 D_VELOCITY = 20/3 # kts
+V_SPEED = 20/3 # kts, TODO investigate what this should be
 
 class SectorCREnv(gym.Env):
     """ 
@@ -64,7 +66,7 @@ class SectorCREnv(gym.Env):
             }
         )
 
-        self.action_space = spaces.Box(-1, 1, shape=(2,), dtype=np.float64)
+        self.action_space = spaces.Box(-1, 1, shape=(3,), dtype=np.float64)
 
         assert render_mode is None or render_mode in self.metadata["render_modes"]
         self.render_mode = render_mode
@@ -116,7 +118,7 @@ class SectorCREnv(gym.Env):
     
     def step(self, action):
         self._get_action(action)
-        action_frequency = ACTION_FREQUENCY
+        action_frequency = ACTION_FREQUENCY # Action freqeuncy is how many time steps we make that decision for??
         for _ in range(action_frequency):
             bs.sim.step()
             if self.render_mode == "human":              
@@ -244,8 +246,10 @@ class SectorCREnv(gym.Env):
         self.airspeed = np.array([])
         self.x_r = np.array([])
         self.y_r = np.array([])
+        #TODO add self.z_r: the z distances from all the intrudors
         self.vx_r = np.array([])
         self.vy_r = np.array([])
+        #TODO add self.vz_r: the z velocity of the ac
         self.cos_track = np.array([])
         self.sin_track = np.array([])
         self.distances = np.array([])
@@ -270,10 +274,11 @@ class SectorCREnv(gym.Env):
 
         vx = np.cos(np.deg2rad(ac_hdg)) * bs.traf.tas[ac_idx]
         vy = np.sin(np.deg2rad(ac_hdg)) * bs.traf.tas[ac_idx]
+        #TODO add vz: velocity in the z direction
 
         ac_loc = fn.latlong_to_nm(CENTER, np.array([bs.traf.lat[ac_idx], bs.traf.lon[ac_idx]])) * NM2KM * 1000 # Two-step conversion lat/long -> NM -> m
         distances = [fn.euclidean_distance(ac_loc, fn.latlong_to_nm(CENTER, np.array([bs.traf.lat[i], bs.traf.lon[i]])) * NM2KM * 1000) for i in range(1, self.num_ac)]
-        ac_idx_by_dist = np.argsort(distances)
+        ac_idx_by_dist = np.argsort(distances) #TODO update the way distances is alcualted to accoutnfor third dimension
 
         for i in range(self.num_ac-1):
             ac_idx = ac_idx_by_dist[i]+1
@@ -295,7 +300,7 @@ class SectorCREnv(gym.Env):
             self.cos_track = np.append(self.cos_track, np.cos(track))
             self.sin_track = np.append(self.sin_track, np.sin(track))
 
-            self.distances = np.append(self.distances, distances[ac_idx-1])
+            self.distances = np.append(self.distances, distances[ac_idx-1]) #TODO ap
 
         observation = {
             "cos(drift)": self.cos_drift,
@@ -315,8 +320,10 @@ class SectorCREnv(gym.Env):
     def _get_action(self, action):
         dh = action[0] * D_HEADING
         dv = action[1] * D_VELOCITY
+        vs = action[3] * V_SPEED
         heading_new = fn.bound_angle_positive_negative_180(bs.traf.hdg[bs.traf.id2idx(ACTOR)] + dh)
         speed_new = (bs.traf.cas[bs.traf.id2idx(ACTOR)] + dv) * MpS2Kt
+        vertical_speed_new = (bs.traf.cas[bs.traf.id2idx(ACTOR)] + vs) * VMpS2Kt # TODO investigate if this is how we should do this
 
         bs.stack.stack(f"HDG {ACTOR} {heading_new}")
         bs.stack.stack(f"SPD {ACTOR} {speed_new}")
