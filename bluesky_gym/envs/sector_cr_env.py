@@ -95,7 +95,7 @@ class SectorCREnv(gym.Env):
         self.total_intrusions = 0
         self.average_drift = np.array([])
        
-        self._generate_polygon() # Create airspace polygon
+        self._generate_polygon() # Create airspace polygon, ADD third dimsension, hieght (make is 0 for now)
         
         if self.density_mode == "normal":
             rand_density = np.random.normal(AC_DENSITY_MU, AC_DENSITY_SIGMA)
@@ -161,6 +161,8 @@ class SectorCREnv(gym.Env):
         points = [coord for point in p for coord in point] # Flatten the list of points
         bs.tools.areafilter.defineArea(self.poly_name, 'POLY', points)
     
+
+    # This  (I think!) builds the path for each intruder. For now, its fine if it keeps the same altitude so this can be ignored
     def _generate_waypoints(self):
         
         edges = []
@@ -202,6 +204,7 @@ class SectorCREnv(gym.Env):
         while len(init_p_latlong) < self.num_ac:
             p = np.array([np.random.uniform(min_x, max_x), np.random.uniform(min_y, max_y)])
             p = fn.nm_to_latlong(CENTER, p)
+            #TODO make ALTITUDE randomly generated and fall along a normal distribution.
             if bs.tools.areafilter.checkInside(self.poly_name, np.array([p[0]]), np.array([p[1]]), np.array([ALTITUDE*FL2M])):
                 init_p_latlong.append(p)
         
@@ -209,7 +212,7 @@ class SectorCREnv(gym.Env):
         init_pos_agent = init_p_latlong[0]
         hdg_agent = fn.get_hdg(init_pos_agent, wpt_agent)
         
-        # Actor AC is the only one that has ACTOR as acid
+        # Actor AC is the only one that has ACTOR as acid. acalt is set to ALTITUDE for all of them. 
         bs.traf.cre(ACTOR, actype=AC_TYPE, aclat=init_pos_agent[0], aclon=init_pos_agent[1], achdg=hdg_agent, acspd=AC_SPD, acalt=ALTITUDE)
         
         for i in range(1, len(init_p_latlong)):
