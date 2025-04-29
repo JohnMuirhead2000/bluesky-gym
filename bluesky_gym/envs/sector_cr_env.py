@@ -13,8 +13,8 @@ AC_DENSITY_MU = 0.005 # In AC/NM^2
 AC_DENSITY_SIGMA = 0.001 # In AC/NM^2
 
 POLY_AREA_RANGE = (2400, 3750) # In NM^2
-CENTER = np.array([51.990426702297746, 4.376124857109851]) # TU Delft AE Faculty coordinates
-ALTITUDE = 350 # In FL
+CENTER = np.array([51.990426702297746, 4.376124857109851, 350]) # TU Delft AE Faculty coordinates, 350 is meters?? idk
+# ALTITUDE = 350 # In FL
 
 # Aircraft parameters
 AC_SPD = 150
@@ -58,8 +58,10 @@ class SectorCREnv(gym.Env):
                 "airspeed": spaces.Box(-1, 1, shape=(1,), dtype=np.float64),
                 "x_r": spaces.Box(-np.inf, np.inf, shape=(NUM_AC_STATE,), dtype=np.float64),
                 "y_r": spaces.Box(-np.inf, np.inf, shape=(NUM_AC_STATE,), dtype=np.float64),
+                "z_r": spaces.Box(-np.inf, np.inf, shape=(NUM_AC_STATE,), dtype=np.float64),
                 "vx_r": spaces.Box(-np.inf, np.inf, shape=(NUM_AC_STATE,), dtype=np.float64),
                 "vy_r": spaces.Box(-np.inf, np.inf, shape=(NUM_AC_STATE,), dtype=np.float64),
+                "vz_r": spaces.Box(-np.inf, np.inf, shape=(NUM_AC_STATE,), dtype=np.float64),
                 "cos(track)": spaces.Box(-np.inf, np.inf, shape=(NUM_AC_STATE,), dtype=np.float64),
                 "sin(track)": spaces.Box(-np.inf, np.inf, shape=(NUM_AC_STATE,), dtype=np.float64),
                 "distances": spaces.Box(-np.inf, np.inf, shape=(NUM_AC_STATE,), dtype=np.float64)
@@ -196,30 +198,31 @@ class SectorCREnv(gym.Env):
         # Determine bounding box of airspace
         min_x = min(self.poly_points[:, 0])
         min_y = min(self.poly_points[:, 1])
+        min_z = min(self.poly_points[:, 2])
         max_x = max(self.poly_points[:, 0])
         max_y = max(self.poly_points[:, 1])
+        max_z = max(self.poly_points[:, 2])
         
-        init_p_latlong = []
+        init_p_latlongalt = []
         
-        while len(init_p_latlong) < self.num_ac:
-            p = np.array([np.random.uniform(min_x, max_x), np.random.uniform(min_y, max_y)])
+        while len(init_p_latlongalt) < self.num_ac:
+            p = np.array([np.random.uniform(min_x, max_x), np.random.uniform(min_y, max_y), np.random.uniform(min_z, max_z)])
             p = fn.nm_to_latlong(CENTER, p)
-            #TODO make ALTITUDE randomly generated and fall along a normal distribution.
-            if bs.tools.areafilter.checkInside(self.poly_name, np.array([p[0]]), np.array([p[1]]), np.array([ALTITUDE*FL2M])):
-                init_p_latlong.append(p)
+            if bs.tools.areafilter.checkInside(self.poly_name, np.array([p[0]]), np.array([p[1]]), np.array([p[2]])):
+                init_p_latlongalt.append(p)
         
         wpt_agent = fn.nm_to_latlong(CENTER, self.wpts[0])
-        init_pos_agent = init_p_latlong[0]
+        init_pos_agent = init_p_latlongalt[0]
         hdg_agent = fn.get_hdg(init_pos_agent, wpt_agent)
         
         # Actor AC is the only one that has ACTOR as acid. acalt is set to ALTITUDE for all of them. 
-        bs.traf.cre(ACTOR, actype=AC_TYPE, aclat=init_pos_agent[0], aclon=init_pos_agent[1], achdg=hdg_agent, acspd=AC_SPD, acalt=ALTITUDE)
+        bs.traf.cre(ACTOR, actype=AC_TYPE, aclat=init_pos_agent[0], aclon=init_pos_agent[1], acalt=init_pos_agent[2], achdg=hdg_agent, acspd=AC_SPD)
         
-        for i in range(1, len(init_p_latlong)):
+        for i in range(1, len(init_p_latlongalt)):
             wpt = fn.nm_to_latlong(CENTER, self.wpts[i])
-            init_pos = init_p_latlong[i]
+            init_pos = init_p_latlongalt[i]
             hdg = fn.get_hdg(init_pos, wpt)
-            bs.traf.cre(acid=str(i), actype=AC_TYPE, aclat=init_pos[0], aclon=init_pos[1], achdg=hdg, acspd=AC_SPD, acalt=ALTITUDE)
+            bs.traf.cre(acid=str(i), actype=AC_TYPE, aclat=init_pos[0], aclon=init_pos[1], acalt=init_pos_agent[2], achdg=hdg, acspd=AC_SPD)
     
     def _get_info(self):
         # Here you implement any additional info that you want to log after an episode
@@ -249,10 +252,10 @@ class SectorCREnv(gym.Env):
         self.airspeed = np.array([])
         self.x_r = np.array([])
         self.y_r = np.array([])
-        #TODO add self.z_r: the z distances from all the intrudors
+        self.z_r = np.array([])
         self.vx_r = np.array([])
         self.vy_r = np.array([])
-        #TODO add self.vz_r: the z velocity of the ac
+        self.vz_r = np.array([])
         self.cos_track = np.array([])
         self.sin_track = np.array([])
         self.distances = np.array([])
@@ -277,10 +280,10 @@ class SectorCREnv(gym.Env):
 
         vx = np.cos(np.deg2rad(ac_hdg)) * bs.traf.tas[ac_idx]
         vy = np.sin(np.deg2rad(ac_hdg)) * bs.traf.tas[ac_idx]
-        #TODO add vz: velocity in the z direction
+        vz = 999 # TODO, no idea how to calculate this. 
 
-        ac_loc = fn.latlong_to_nm(CENTER, np.array([bs.traf.lat[ac_idx], bs.traf.lon[ac_idx]])) * NM2KM * 1000 # Two-step conversion lat/long -> NM -> m
-        distances = [fn.euclidean_distance(ac_loc, fn.latlong_to_nm(CENTER, np.array([bs.traf.lat[i], bs.traf.lon[i]])) * NM2KM * 1000) for i in range(1, self.num_ac)]
+        ac_loc = fn.latlongalt_to_nm(CENTER, np.array([bs.traf.lat[ac_idx], bs.traf.lon[ac_idx], bs.traf.lat[ac_idx]])) * NM2KM * 1000 # Two-step conversion lat/long -> NM -> m
+        distances = [fn.euclidean_distance(ac_loc, fn.latlongalt_to_nm(CENTER, np.array([bs.traf.lat[i], bs.traf.lon[i], bs.traf.lat[i]])) * NM2KM * 1000) for i in range(1, self.num_ac)]
         ac_idx_by_dist = np.argsort(distances) #TODO update the way distances is alcualted to accoutnfor third dimension
 
         for i in range(self.num_ac-1):
@@ -288,15 +291,18 @@ class SectorCREnv(gym.Env):
             int_hdg = bs.traf.hdg[ac_idx]
             
             # Intruder AC relative position, m
-            int_loc = fn.latlong_to_nm(CENTER, np.array([bs.traf.lat[ac_idx], bs.traf.lon[ac_idx]])) * NM2KM * 1000
+            int_loc = fn.latlongalt_to_nm(CENTER, np.array([bs.traf.lat[ac_idx], bs.traf.lon[ac_idx], bs.traf.lat[ac_idx]])) * NM2KM * 1000
             self.x_r = np.append(self.x_r, int_loc[0] - ac_loc[0])
             self.y_r = np.append(self.y_r, int_loc[1] - ac_loc[1])
+            self.z_r = np.append(self.z_r, int_loc[2] - ac_loc[2])
             
             # Intruder AC relative velocity, m/s
             vx_int = np.cos(np.deg2rad(int_hdg)) * bs.traf.tas[ac_idx]
             vy_int = np.sin(np.deg2rad(int_hdg)) * bs.traf.tas[ac_idx]
+            vz_int = 0 # the intruder stays at the same altitude
             self.vx_r = np.append(self.vx_r, vx_int - vx)
             self.vy_r = np.append(self.vy_r, vy_int - vy)
+            self.vz_r = np.append(self.vz_r, vz_int - vz)
 
             # Intruder AC relative track, rad
             track = np.arctan2(vy_int - vy, vx_int - vx)
@@ -311,8 +317,10 @@ class SectorCREnv(gym.Env):
             "airspeed": (self.airspeed-150)/6,
             "x_r": self.x_r[:NUM_AC_STATE]/13000,
             "y_r": self.y_r[:NUM_AC_STATE]/13000,
+            "z_r": self.z_r[:NUM_AC_STATE]/13000,
             "vx_r": self.vx_r[:NUM_AC_STATE]/32,
             "vy_r": self.vy_r[:NUM_AC_STATE]/66,
+            "vz_r": self.vz_r[:NUM_AC_STATE]/66, # double check the value of 66
             "cos(track)": self.cos_track[:NUM_AC_STATE],
             "sin(track)": self.sin_track[:NUM_AC_STATE],
             "distances": (self.distances[:NUM_AC_STATE]-50000.)/15000.
@@ -320,34 +328,43 @@ class SectorCREnv(gym.Env):
 
         return observation
     
+    # this has been updated but it always pays to double check :D
     def _get_action(self, action):
+
         dh = action[0] * D_HEADING
         dv = action[1] * D_VELOCITY
-        vs = action[3] * V_SPEED
+        vs = action[2] * V_SPEED
+
         heading_new = fn.bound_angle_positive_negative_180(bs.traf.hdg[bs.traf.id2idx(ACTOR)] + dh)
         speed_new = (bs.traf.cas[bs.traf.id2idx(ACTOR)] + dv) * MpS2Kt
         vertical_speed_new = (bs.traf.cas[bs.traf.id2idx(ACTOR)] + vs) * VMpS2Kt # TODO investigate if this is how we should do this
 
         bs.stack.stack(f"HDG {ACTOR} {heading_new}")
         bs.stack.stack(f"SPD {ACTOR} {speed_new}")
+        bs.stack.stack(f"VSPD {ACTOR} {vertical_speed_new}")
 
+    # this can prob stay the same
     def _check_drift(self):
         drift = abs(np.deg2rad(self.drift))
         self.average_drift = np.append(self.average_drift, drift)
         return drift * DRIFT_PENALTY
     
+
+    # this will need an update. ALL SET
     def _check_intrusion(self):
         ac_idx = bs.traf.id2idx(ACTOR)
         reward = 0
         for i in range(self.num_ac-1):
             int_idx = i+1
-            _, int_dis = bs.tools.geo.kwikqdrdist(bs.traf.lat[ac_idx], bs.traf.lon[ac_idx], bs.traf.lat[int_idx], bs.traf.lon[int_idx])
+            _, int_dis = bs.tools.geo.kwikqdrdist(bs.traf.lat[ac_idx], bs.traf.lon[ac_idx], bs.traf.alt[ac_idx], 
+                                                  bs.traf.lat[int_idx], bs.traf.lon[int_idx], bs.traf.alt[int_idx])
             if int_dis < INTRUSION_DISTANCE:
                 self.total_intrusions += 1
                 reward += INTRUSION_PENALTY
         
         return reward
         
+    # Ignore visuals for now
     def _render_frame(self):
         if self.window is None and self.render_mode == "human":
             pygame.init()

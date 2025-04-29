@@ -131,6 +131,25 @@ def latlong_to_nm(center: np.array, point: np.array) -> np.array:
     y = (point[1] - center[1]) * 60 * np.cos(np.radians(center[0]))
     return np.array([x, y])
 
+def latlongalt_to_nm(center: np.array, point: np.array) -> np.array:
+    """ Convert a point in lat/long/alt coordinates to nm
+    Parameters
+    __________
+    center: np.array
+        center point of the conversion
+    point: np.array
+        point to be converted
+    
+    Returns
+    __________
+    nm: np.array
+        converted point in nm
+    """
+    x = (point[0] - center[0]) * 60
+    y = (point[1] - center[1]) * 60 * np.cos(np.radians(center[0]))
+    z = (point[2] - center[2]) * 60
+    return np.array([x, y, z])
+
 def euclidean_distance(point1: np.array, point2: np.array) -> float:
     """ Calculate the euclidean distance between two points
     Parameters
