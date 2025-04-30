@@ -1,5 +1,6 @@
 import numpy as np
 import pygame
+import math
 
 import bluesky as bs
 from bluesky_gym.envs.common.screen_dummy import ScreenDummy
@@ -13,8 +14,9 @@ AC_DENSITY_MU = 0.005 # In AC/NM^2
 AC_DENSITY_SIGMA = 0.001 # In AC/NM^2
 
 POLY_AREA_RANGE = (2400, 3750) # In NM^2
-CENTER = np.array([51.990426702297746, 4.376124857109851, 350]) # TU Delft AE Faculty coordinates, 350 is meters?? idk
-# ALTITUDE = 350 # In FL
+CENTER = np.array([51.990426702297746, 4.376124857109851]) # TU Delft AE Faculty coordinates, 350 is meters?? idk
+MIN_ALTITUDE = 0 #
+MAX_ALTITUDE = 1000
 
 # Aircraft parameters
 AC_SPD = 150
@@ -97,7 +99,7 @@ class SectorCREnv(gym.Env):
         self.total_intrusions = 0
         self.average_drift = np.array([])
        
-        self._generate_polygon() # Create airspace polygon, ADD third dimsension, hieght (make is 0 for now)
+        self._generate_polygon() # Create airspace polygon map, can keep 2 dimensioal. d
         
         if self.density_mode == "normal":
             rand_density = np.random.normal(AC_DENSITY_MU, AC_DENSITY_SIGMA)
@@ -137,7 +139,7 @@ class SectorCREnv(gym.Env):
     
     def _check_inside_airspace(self):
         ac_idx = bs.traf.id2idx(ACTOR)
-        if bs.tools.areafilter.checkInside(self.poly_name, np.array([bs.traf.lat[ac_idx]]), np.array([bs.traf.lon[ac_idx]]), np.array([ALTITUDE*FL2M])):
+        if bs.tools.areafilter.checkInside(self.poly_name, np.array([bs.traf.lat[ac_idx]]), np.array([bs.traf.lon[ac_idx]]), np.array([bs.traf.alt[ac_idx]])):
             return False
         else:
             return True
@@ -158,7 +160,7 @@ class SectorCREnv(gym.Env):
         
         self.poly_points = np.array(p) # Polygon vertices are saved in terms of NM
         
-        p = [fn.nm_to_latlongalt(CENTER, point) for point in p] # Convert to lat/long/alt coordinateS
+        p = [fn.nm_to_latlong(CENTER, point) for point in p] # Convert to lat/long/alt coordinateS
         
         points = [coord for point in p for coord in point] # Flatten the list of points
         bs.tools.areafilter.defineArea(self.poly_name, 'POLY', points)
@@ -206,23 +208,29 @@ class SectorCREnv(gym.Env):
         init_p_latlongalt = []
         
         while len(init_p_latlongalt) < self.num_ac:
-            p = np.array([np.random.uniform(min_x, max_x), np.random.uniform(min_y, max_y), np.random.uniform(min_z, max_z)])
-            p = fn.nm_to_latlongalt(CENTER, p)
+            p = np.array([np.random.uniform(min_x, max_x), np.random.uniform(min_y, max_y), np.random.uniform(min_z, max_z), np.random.uniform(min_z, max_z)])
+            p = fn.nm_to_latlonalt(CENTER, p) # `p` needs an altitude so we use our custom function.
+
+            # the polygon is 2d
             if bs.tools.areafilter.checkInside(self.poly_name, np.array([p[0]]), np.array([p[1]]), np.array([p[2]])):
                 init_p_latlongalt.append(p)
         
-        wpt_agent = fn.nm_to_latlongalt(CENTER, self.wpts[0])
+        wpt_agent = fn.nm_to_latlong(CENTER, self.wpts[0])
         init_pos_agent = init_p_latlongalt[0]
-        hdg_agent = fn.get_hdg(init_pos_agent, wpt_agent)
+        flat_pos_agent = init_pos_agent[:2]
+        init_alt_agent = init_pos_agent[2]
+        hdg_agent = fn.get_hdg(flat_pos_agent, wpt_agent)
         
         # Actor AC is the only one that has ACTOR as acid. acalt is set to ALTITUDE for all of them. 
-        bs.traf.cre(ACTOR, actype=AC_TYPE, aclat=init_pos_agent[0], aclon=init_pos_agent[1], acalt=init_pos_agent[2], achdg=hdg_agent, acspd=AC_SPD)
+        bs.traf.cre(ACTOR, actype=AC_TYPE, aclat=flat_pos_agent[0], aclon=flat_pos_agent[1], acalt=init_alt_agent, achdg=hdg_agent, acspd=AC_SPD)
         
         for i in range(1, len(init_p_latlongalt)):
-            wpt = fn.nm_to_latlongalt(CENTER, self.wpts[i])
+            wpt = fn.nm_to_latlong(CENTER, self.wpts[i])
             init_pos = init_p_latlongalt[i]
-            hdg = fn.get_hdg(init_pos, wpt)
-            bs.traf.cre(acid=str(i), actype=AC_TYPE, aclat=init_pos[0], aclon=init_pos[1], acalt=init_pos_agent[2], achdg=hdg, acspd=AC_SPD)
+            flat_pos = init_pos[:2]
+            init_alt = init_pos[2]
+            hdg = fn.get_hdg(flat_pos, wpt)
+            bs.traf.cre(acid=str(i), actype=AC_TYPE, aclat=flat_pos[0], aclon=flat_pos[1], acalt=init_alt, achdg=hdg, acspd=AC_SPD)
     
     def _get_info(self):
         # Here you implement any additional info that you want to log after an episode
@@ -280,11 +288,11 @@ class SectorCREnv(gym.Env):
 
         vx = np.cos(np.deg2rad(ac_hdg)) * bs.traf.tas[ac_idx]
         vy = np.sin(np.deg2rad(ac_hdg)) * bs.traf.tas[ac_idx]
-        vz = 999 # TODO, no idea how to calculate this. 
+        vz = bs.traf.vs # TODO, Check on this, but vs is likley vertical speed
 
         ac_loc = fn.latlongalt_to_nm(CENTER, np.array([bs.traf.lat[ac_idx], bs.traf.lon[ac_idx], bs.traf.lat[ac_idx]])) * NM2KM * 1000 # Two-step conversion lat/long -> NM -> m
         distances = [fn.euclidean_distance(ac_loc, fn.latlongalt_to_nm(CENTER, np.array([bs.traf.lat[i], bs.traf.lon[i], bs.traf.lat[i]])) * NM2KM * 1000) for i in range(1, self.num_ac)]
-        ac_idx_by_dist = np.argsort(distances) #TODO update the way distances is alcualted to accoutnfor third dimension
+        ac_idx_by_dist = np.argsort(distances)
 
         for i in range(self.num_ac-1):
             ac_idx = ac_idx_by_dist[i]+1
@@ -356,8 +364,10 @@ class SectorCREnv(gym.Env):
         reward = 0
         for i in range(self.num_ac-1):
             int_idx = i+1
-            _, int_dis = bs.tools.geo.kwikqdrdist(bs.traf.lat[ac_idx], bs.traf.lon[ac_idx], bs.traf.alt[ac_idx], 
-                                                  bs.traf.lat[int_idx], bs.traf.lon[int_idx], bs.traf.alt[int_idx])
+            _, flat_dist = bs.tools.geo.kwikqdrdist(bs.traf.lat[ac_idx], bs.traf.lon[ac_idx], bs.traf.lat[int_idx], bs.traf.lon[int_idx])
+            vertical_dist = abs(bs.traf.alt[ac_idx] - bs.traf.alt[int_idx])
+            int_dis = math.sqrt(flat_dist**2 + vertical_dist**2)
+            
             if int_dis < INTRUSION_DISTANCE:
                 self.total_intrusions += 1
                 reward += INTRUSION_PENALTY

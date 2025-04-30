@@ -118,6 +118,26 @@ def nm_to_latlong(center: np.array, point: np.array) -> np.array:
     return np.array([lat, lon])
 
 
+def nm_to_latlonalt(center: np.array, point: np.array) -> np.array:
+    """ Convert a point in nm to lat/long coordinates
+    Parameters
+    __________
+    center: np.array
+        center point of the conversion
+    point: np.array
+        point to be converted
+    
+    Returns
+    __________
+    latlong: np.array
+        converted point in lat/long coordinates
+    """
+    lat = center[0] + (point[0] / 60)
+    lon = center[1] + (point[1] / (60 * np.cos(np.radians(center[0]))))
+    alt = point[2] # altitude will stay the same
+    return np.array([lat, lon, alt])
+
+
 def nm_to_latlongalt(center: np.array, point: np.array) -> np.array:
     """ Convert a point in nm to lat/long/alt coordinates
     Parameters
@@ -171,7 +191,7 @@ def latlongalt_to_nm(center: np.array, point: np.array) -> np.array:
     """
     x = (point[0] - center[0]) * 60
     y = (point[1] - center[1]) * 60 * np.cos(np.radians(center[0]))
-    z = (point[2] - center[2]) * 60
+    z = point[2]
     return np.array([x, y, z])
 
 def euclidean_distance(point1: np.array, point2: np.array) -> float:
@@ -205,7 +225,7 @@ def get_hdg(point1: np.array, point2: np.array) -> float:
         heading from point1 to point2
     """
     
-    lat1, lon1 = np.radians(point1)
+    lat1, lon1, = np.radians(point1)
     lat2, lon2 = np.radians(point2)
     
     delta_lon = lon2 - lon1
