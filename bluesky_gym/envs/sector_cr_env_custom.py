@@ -13,17 +13,18 @@ AC_DENSITY_MU = 0.005 # In AC/NM^2
 AC_DENSITY_SIGMA = 0.001 # In AC/NM^2
 
 POLY_AREA_RANGE = (2400, 3750) # In NM^2
-CENTER = np.array([51.990426702297746, 4.376124857109851]) # TU Delft AE Faculty coordinates
-ALTITUDE = 350 # In FL
+CENTER = np.array([51.990426702297746, 4.376124857109851, 350]) # TU Delft AE Faculty coordinates, 350 is meters?? idk
+# ALTITUDE = 350 # In FL
 
 # Aircraft parameters
 AC_SPD = 150
 AC_TYPE = "A320"
-ACTOR = "KL001"
+ACTOR = "KL001" # this is OUR aircraft
 
 # Conversion factors
 NM2KM = 1.852
-MpS2Kt = 1.94384
+MpS2Kt = 1.94384 # This 'conversion factor' is used when calculating the horizontal speed
+VMpS2Kt = 1.94384 # TODO invesitgate if this is how we should use this
 FL2M = 30.48
 
 INTRUSION_DISTANCE = 5 # NM
@@ -35,6 +36,7 @@ DRIFT_PENALTY = -0.1
 INTRUSION_PENALTY = -1
 D_HEADING = 22.5 # deg
 D_VELOCITY = 20/3 # kts
+V_SPEED = 20/3 # kts, TODO investigate what this should be
 
 class SectorCREnv(gym.Env):
     """ 
@@ -43,63 +45,59 @@ class SectorCREnv(gym.Env):
     metadata = {"render_modes": ["rgb_array","human"], "render_fps": 120}
     
     def __init__(self, render_mode=None, ac_density_mode="normal"):
-        # import pdb; pdb.set_trace()
-        self.window_width = 512 # display window width
-        self.window_height = 512 # display window height
-        self.window_size = (self.window_width, self.window_height) # Size of the rendered environment 
-        self.density_mode = ac_density_mode # a simulation parameter to not change
-        self.poly_name = 'airspace' # idk what 
+        self.window_width = 512
+        self.window_height = 512
+        self.window_size = (self.window_width, self.window_height) # Size of the rendered environment
+        self.density_mode = ac_density_mode
+        self.poly_name = 'airspace'
         # Feel free to add more observation spaces
         self.observation_space = spaces.Dict(
             {
-                # a Box gives: lower bound, upper bound, SHAPE, type of content
-                "cos(drift)": spaces.Box(-1, 1, shape=(1,), dtype=np.float64), # dirft is an angle. The angle between the AC nose and actual vel
-                "sin(drift)": spaces.Box(-1, 1, shape=(1,), dtype=np.float64), # dirft is an angle. The angle between the AC nose and actual vel
-                "airspeed": spaces.Box(-1, 1, shape=(1,), dtype=np.float64), # the total speed
-                "x_r": spaces.Box(-np.inf, np.inf, shape=(NUM_AC_STATE,), dtype=np.float64), # the x distance of the 5 closest AC intrudors 
-                "y_r": spaces.Box(-np.inf, np.inf, shape=(NUM_AC_STATE,), dtype=np.float64), # the y distance of the 5 closest AC instruors
-                "vx_r": spaces.Box(-np.inf, np.inf, shape=(NUM_AC_STATE,), dtype=np.float64), # the relative x velocity of the 5 closest AC
-                "vy_r": spaces.Box(-np.inf, np.inf, shape=(NUM_AC_STATE,), dtype=np.float64), # the relative y velocity of the 5 closest AC
-                "cos(track)": spaces.Box(-np.inf, np.inf, shape=(NUM_AC_STATE,), dtype=np.float64), # the actual direction of motion in the XY plane
-                "sin(track)": spaces.Box(-np.inf, np.inf, shape=(NUM_AC_STATE,), dtype=np.float64), # the actual direction of motion in the XY plane
-                "distances": spaces.Box(-np.inf, np.inf, shape=(NUM_AC_STATE,), dtype=np.float64) # the 5 closes distances
+                "cos(drift)": spaces.Box(-1, 1, shape=(1,), dtype=np.float64),
+                "sin(drift)": spaces.Box(-1, 1, shape=(1,), dtype=np.float64),
+                "airspeed": spaces.Box(-1, 1, shape=(1,), dtype=np.float64),
+                "x_r": spaces.Box(-np.inf, np.inf, shape=(NUM_AC_STATE,), dtype=np.float64),
+                "y_r": spaces.Box(-np.inf, np.inf, shape=(NUM_AC_STATE,), dtype=np.float64),
+                "z_r": spaces.Box(-np.inf, np.inf, shape=(NUM_AC_STATE,), dtype=np.float64),
+                "vx_r": spaces.Box(-np.inf, np.inf, shape=(NUM_AC_STATE,), dtype=np.float64),
+                "vy_r": spaces.Box(-np.inf, np.inf, shape=(NUM_AC_STATE,), dtype=np.float64),
+                "vz_r": spaces.Box(-np.inf, np.inf, shape=(NUM_AC_STATE,), dtype=np.float64),
+                "cos(track)": spaces.Box(-np.inf, np.inf, shape=(NUM_AC_STATE,), dtype=np.float64),
+                "sin(track)": spaces.Box(-np.inf, np.inf, shape=(NUM_AC_STATE,), dtype=np.float64),
+                "distances": spaces.Box(-np.inf, np.inf, shape=(NUM_AC_STATE,), dtype=np.float64)
             }
         )
 
-        # the action space has 2 and only 2 tihngs. Heading and Speed!
-        self.action_space = spaces.Box(-1, 1, shape=(2,), dtype=np.float64)
+        self.action_space = spaces.Box(-1, 1, shape=(3,), dtype=np.float64)
 
-        assert render_mode is None or render_mode in self.metadata["render_modes"] # idk what this is
+        assert render_mode is None or render_mode in self.metadata["render_modes"]
         self.render_mode = render_mode
 
         # initialize bluesky as non-networked simulation node
-        bs.init(mode='sim', detached=True) # start the blue-sky simulator
+        bs.init(mode='sim', detached=True)
 
         # initialize dummy screen and set correct sim speed
         bs.scr = ScreenDummy()
         bs.stack.stack('DT 1;FF')
 
         # initialize values used for logging -> input in _get_info
-        self.total_reward = 0 # total rewards in this simulaion
-        self.total_intrusions = 0 # total intrusions in this simulation 
-        self.average_drift = np.array([]) # average drift over time???
+        self.total_reward = 0
+        self.total_intrusions = 0
+        self.average_drift = np.array([])
 
-        self.window = None # idk
-        self.clock = None # idk
+        self.window = None
+        self.clock = None
     
     def reset(self, seed=None, options=None):
-        bs.traf.reset() # bluesky function to clear traffic data
+        bs.traf.reset()
         bs.tools.areafilter.deleteArea(self.poly_name)
         super().reset(seed=seed)
 
-        self.total_reward = 0 # set the reward to 0
-        self.total_intrusions = 0 # set the number of intrustions to 0
-        self.average_drift = np.array([]) # set the drift array to blank
+        self.total_reward = 0
+        self.total_intrusions = 0
+        self.average_drift = np.array([])
        
-        self._generate_polygon() # Create airspace polygon, that is the 2D MAP that we are trying to escape
-        
-
-        # all these lines do. ALL they do, is set up the num_ac paramer. In fact, as a funny joke set it to 1 and see if all else is smooth. 
+        self._generate_polygon() # Create airspace polygon, ADD third dimsension, hieght (make is 0 for now)
         
         if self.density_mode == "normal":
             rand_density = np.random.normal(AC_DENSITY_MU, AC_DENSITY_SIGMA)
@@ -107,8 +105,8 @@ class SectorCREnv(gym.Env):
         else:
             rand_density = np.random.uniform(*AC_DENSITY_RANGE)
             self.num_ac = int(max(np.ceil(rand_density * self.poly_area), NUM_AC_STATE+1)) # Get total number of AC in the airspace including agent (min = 3)
-
-        self._generate_waypoints() # Create waypoints for aircraft. Each AC gets 1 and only 1 waypoint on the perimeter. This WP is used to define is starting locaiton. 
+        
+        self._generate_waypoints() # Create waypoints for aircraft
         self._generate_ac() # Create aircraft in the airspace
 
         observation = self._get_observation()
@@ -122,7 +120,7 @@ class SectorCREnv(gym.Env):
     
     def step(self, action):
         self._get_action(action)
-        action_frequency = ACTION_FREQUENCY
+        action_frequency = ACTION_FREQUENCY # Action freqeuncy is how many time steps we make that decision for??
         for _ in range(action_frequency):
             bs.sim.step()
             if self.render_mode == "human":              
@@ -160,13 +158,13 @@ class SectorCREnv(gym.Env):
         
         self.poly_points = np.array(p) # Polygon vertices are saved in terms of NM
         
-        p = [fn.nm_to_latlong(CENTER, point) for point in p] # Convert to lat/long coordinateS
+        p = [fn.nm_to_latlongalt(CENTER, point) for point in p] # Convert to lat/long/alt coordinateS
         
         points = [coord for point in p for coord in point] # Flatten the list of points
         bs.tools.areafilter.defineArea(self.poly_name, 'POLY', points)
     
 
-    # this function does 1 and only 1 thing, populates the self.wpts. self.wpts is ONLY used again in _generate_ac (and observation) 
+    # This  (I think!) builds the path for each intruder. For now, its fine if it keeps the same altitude so this can be ignored
     def _generate_waypoints(self):
         
         edges = []
@@ -195,47 +193,36 @@ class SectorCREnv(gym.Env):
             p = edge[0] + frac * (edge[1] - edge[0])
             self.wpts.append(p)
         
-    """
-      build each and every aircraft using only the polygon we've generated and the waypoints from earlier
-      and the number of aircraft. It plugs it into the BlueSky simulation. 
-    """
     def _generate_ac(self) -> None:
         
         # Determine bounding box of airspace
-
-
         min_x = min(self.poly_points[:, 0])
         min_y = min(self.poly_points[:, 1])
+        min_z = 0 # set the minimum altidude to 0, duh
         max_x = max(self.poly_points[:, 0])
         max_y = max(self.poly_points[:, 1])
+        max_z = 1000 # arbitrarly set the max to 1000
         
-        init_p_latlong = []
-
-        # random position are defined. THe AC bots travel in a straight line towards the WP along the perimeter!
+        init_p_latlongalt = []
         
-        # this loops builds all the AC (including agent) and picks out a point for a starting location using random.uniform
-        while len(init_p_latlong) < self.num_ac:
-            p = np.array([np.random.uniform(min_x, max_x), np.random.uniform(min_y, max_y)]) # get a random point
-            p = fn.nm_to_latlong(CENTER, p) # put it in latitude, longidude
-            if bs.tools.areafilter.checkInside(self.poly_name, np.array([p[0]]), np.array([p[1]]), np.array([ALTITUDE*FL2M])):
-                init_p_latlong.append(p) # if this point is inside the bounndry, put it in init_p_latlong
+        while len(init_p_latlongalt) < self.num_ac:
+            p = np.array([np.random.uniform(min_x, max_x), np.random.uniform(min_y, max_y), np.random.uniform(min_z, max_z)])
+            p = fn.nm_to_latlongalt(CENTER, p)
+            if bs.tools.areafilter.checkInside(self.poly_name, np.array([p[0]]), np.array([p[1]]), np.array([p[2]])):
+                init_p_latlongalt.append(p)
         
-        # this one creates the agent. wpts[0] is the waypoint
-        wpt_agent = fn.nm_to_latlong(CENTER, self.wpts[0])
-        init_pos_agent = init_p_latlong[0] # the first random position is the one we'll use 
-        hdg_agent = fn.get_hdg(init_pos_agent, wpt_agent) # the agents 'waypoint' is only used to give it a heading AHAHAH
+        wpt_agent = fn.nm_to_latlongalt(CENTER, self.wpts[0])
+        init_pos_agent = init_p_latlongalt[0]
+        hdg_agent = fn.get_hdg(init_pos_agent, wpt_agent)
         
-        # Actor AC is the only one that has ACTOR as acid (acid tag??) `bs.traf.cre` adds it to the simulaiton? so to speak
-        bs.traf.cre(ACTOR, actype=AC_TYPE, aclat=init_pos_agent[0], aclon=init_pos_agent[1], achdg=hdg_agent, acspd=AC_SPD, acalt=ALTITUDE)
+        # Actor AC is the only one that has ACTOR as acid. acalt is set to ALTITUDE for all of them. 
+        bs.traf.cre(ACTOR, actype=AC_TYPE, aclat=init_pos_agent[0], aclon=init_pos_agent[1], acalt=init_pos_agent[2], achdg=hdg_agent, acspd=AC_SPD)
         
-
-        # every other AC is creared `bs.traf.cre` in the position defined above in the direction defined by the waypoint. 
-        # All it need to do go in a striahgt line. 
-        for i in range(1, len(init_p_latlong)):
-            wpt = fn.nm_to_latlong(CENTER, self.wpts[i])
-            init_pos = init_p_latlong[i]
-            hdg = fn.get_hdg(init_pos, wpt) # point the ac in the direction from inital psoiton to the waypoint on the perimeter. 
-            bs.traf.cre(acid=str(i), actype=AC_TYPE, aclat=init_pos[0], aclon=init_pos[1], achdg=hdg, acspd=AC_SPD, acalt=ALTITUDE)
+        for i in range(1, len(init_p_latlongalt)):
+            wpt = fn.nm_to_latlongalt(CENTER, self.wpts[i])
+            init_pos = init_p_latlongalt[i]
+            hdg = fn.get_hdg(init_pos, wpt)
+            bs.traf.cre(acid=str(i), actype=AC_TYPE, aclat=init_pos[0], aclon=init_pos[1], acalt=init_pos_agent[2], achdg=hdg, acspd=AC_SPD)
     
     def _get_info(self):
         # Here you implement any additional info that you want to log after an episode
@@ -265,8 +252,10 @@ class SectorCREnv(gym.Env):
         self.airspeed = np.array([])
         self.x_r = np.array([])
         self.y_r = np.array([])
+        self.z_r = np.array([])
         self.vx_r = np.array([])
         self.vy_r = np.array([])
+        self.vz_r = np.array([])
         self.cos_track = np.array([])
         self.sin_track = np.array([])
         self.distances = np.array([])
@@ -291,32 +280,36 @@ class SectorCREnv(gym.Env):
 
         vx = np.cos(np.deg2rad(ac_hdg)) * bs.traf.tas[ac_idx]
         vy = np.sin(np.deg2rad(ac_hdg)) * bs.traf.tas[ac_idx]
+        vz = 999 # TODO, no idea how to calculate this. 
 
-        ac_loc = fn.latlong_to_nm(CENTER, np.array([bs.traf.lat[ac_idx], bs.traf.lon[ac_idx]])) * NM2KM * 1000 # Two-step conversion lat/long -> NM -> m
-        distances = [fn.euclidean_distance(ac_loc, fn.latlong_to_nm(CENTER, np.array([bs.traf.lat[i], bs.traf.lon[i]])) * NM2KM * 1000) for i in range(1, self.num_ac)]
-        ac_idx_by_dist = np.argsort(distances)
+        ac_loc = fn.latlongalt_to_nm(CENTER, np.array([bs.traf.lat[ac_idx], bs.traf.lon[ac_idx], bs.traf.lat[ac_idx]])) * NM2KM * 1000 # Two-step conversion lat/long -> NM -> m
+        distances = [fn.euclidean_distance(ac_loc, fn.latlongalt_to_nm(CENTER, np.array([bs.traf.lat[i], bs.traf.lon[i], bs.traf.lat[i]])) * NM2KM * 1000) for i in range(1, self.num_ac)]
+        ac_idx_by_dist = np.argsort(distances) #TODO update the way distances is alcualted to accoutnfor third dimension
 
         for i in range(self.num_ac-1):
             ac_idx = ac_idx_by_dist[i]+1
             int_hdg = bs.traf.hdg[ac_idx]
             
             # Intruder AC relative position, m
-            int_loc = fn.latlong_to_nm(CENTER, np.array([bs.traf.lat[ac_idx], bs.traf.lon[ac_idx]])) * NM2KM * 1000
+            int_loc = fn.latlongalt_to_nm(CENTER, np.array([bs.traf.lat[ac_idx], bs.traf.lon[ac_idx], bs.traf.lat[ac_idx]])) * NM2KM * 1000
             self.x_r = np.append(self.x_r, int_loc[0] - ac_loc[0])
             self.y_r = np.append(self.y_r, int_loc[1] - ac_loc[1])
+            self.z_r = np.append(self.z_r, int_loc[2] - ac_loc[2])
             
             # Intruder AC relative velocity, m/s
             vx_int = np.cos(np.deg2rad(int_hdg)) * bs.traf.tas[ac_idx]
             vy_int = np.sin(np.deg2rad(int_hdg)) * bs.traf.tas[ac_idx]
+            vz_int = 0 # the intruder stays at the same altitude
             self.vx_r = np.append(self.vx_r, vx_int - vx)
             self.vy_r = np.append(self.vy_r, vy_int - vy)
+            self.vz_r = np.append(self.vz_r, vz_int - vz)
 
             # Intruder AC relative track, rad
             track = np.arctan2(vy_int - vy, vx_int - vx)
             self.cos_track = np.append(self.cos_track, np.cos(track))
             self.sin_track = np.append(self.sin_track, np.sin(track))
 
-            self.distances = np.append(self.distances, distances[ac_idx-1])
+            self.distances = np.append(self.distances, distances[ac_idx-1]) #TODO ap
 
         observation = {
             "cos(drift)": self.cos_drift,
@@ -324,8 +317,10 @@ class SectorCREnv(gym.Env):
             "airspeed": (self.airspeed-150)/6,
             "x_r": self.x_r[:NUM_AC_STATE]/13000,
             "y_r": self.y_r[:NUM_AC_STATE]/13000,
+            "z_r": self.z_r[:NUM_AC_STATE]/13000,
             "vx_r": self.vx_r[:NUM_AC_STATE]/32,
             "vy_r": self.vy_r[:NUM_AC_STATE]/66,
+            "vz_r": self.vz_r[:NUM_AC_STATE]/66, # double check the value of 66
             "cos(track)": self.cos_track[:NUM_AC_STATE],
             "sin(track)": self.sin_track[:NUM_AC_STATE],
             "distances": (self.distances[:NUM_AC_STATE]-50000.)/15000.
@@ -333,32 +328,43 @@ class SectorCREnv(gym.Env):
 
         return observation
     
+    # this has been updated but it always pays to double check :D
     def _get_action(self, action):
+
         dh = action[0] * D_HEADING
         dv = action[1] * D_VELOCITY
+        vs = action[2] * V_SPEED
+
         heading_new = fn.bound_angle_positive_negative_180(bs.traf.hdg[bs.traf.id2idx(ACTOR)] + dh)
         speed_new = (bs.traf.cas[bs.traf.id2idx(ACTOR)] + dv) * MpS2Kt
+        vertical_speed_new = (bs.traf.cas[bs.traf.id2idx(ACTOR)] + vs) * VMpS2Kt # TODO investigate if this is how we should do this
 
         bs.stack.stack(f"HDG {ACTOR} {heading_new}")
         bs.stack.stack(f"SPD {ACTOR} {speed_new}")
+        bs.stack.stack(f"VSPD {ACTOR} {vertical_speed_new}")
 
+    # this can prob stay the same
     def _check_drift(self):
         drift = abs(np.deg2rad(self.drift))
         self.average_drift = np.append(self.average_drift, drift)
         return drift * DRIFT_PENALTY
     
+
+    # this will need an update. ALL SET
     def _check_intrusion(self):
         ac_idx = bs.traf.id2idx(ACTOR)
         reward = 0
         for i in range(self.num_ac-1):
             int_idx = i+1
-            _, int_dis = bs.tools.geo.kwikqdrdist(bs.traf.lat[ac_idx], bs.traf.lon[ac_idx], bs.traf.lat[int_idx], bs.traf.lon[int_idx])
+            _, int_dis = bs.tools.geo.kwikqdrdist(bs.traf.lat[ac_idx], bs.traf.lon[ac_idx], bs.traf.alt[ac_idx], 
+                                                  bs.traf.lat[int_idx], bs.traf.lon[int_idx], bs.traf.alt[int_idx])
             if int_dis < INTRUSION_DISTANCE:
                 self.total_intrusions += 1
                 reward += INTRUSION_PENALTY
         
         return reward
         
+    # Ignore visuals for now
     def _render_frame(self):
         if self.window is None and self.render_mode == "human":
             pygame.init()

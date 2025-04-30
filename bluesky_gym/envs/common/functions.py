@@ -56,6 +56,8 @@ def random_point_on_circle(radius: float) -> np.array:
     alpha = 2 * np.pi * np.random.uniform(0., 1.)
     x = radius * np.cos(alpha)
     y = radius * np.sin(alpha)
+    # z = 350 # TODO this will need to change. We need a way to select a decent altitude
+    #return np.array([x, y, z])
     return np.array([x, y])
 
 def sort_points_clockwise(vertices: np.array) -> np.array:
@@ -89,9 +91,11 @@ def polygon_area(vertices: np.array) -> float:
     n = len(vertices)
     area = 0.0
     for i in range(n):
+        # x1, y1, z1 = vertices[i]
+        # x2, y2, z2 = vertices[(i + 1) % n]  # Wrap around to the first vertex
         x1, y1 = vertices[i]
         x2, y2 = vertices[(i + 1) % n]  # Wrap around to the first vertex
-        area += x1 * y2 - y1 * x2
+        area += x1 * y2 - y1 * x2 #TODO, modify this to account for Z
     area = np.abs(area) / 2.0
     return area
 
@@ -112,6 +116,26 @@ def nm_to_latlong(center: np.array, point: np.array) -> np.array:
     lat = center[0] + (point[0] / 60)
     lon = center[1] + (point[1] / (60 * np.cos(np.radians(center[0]))))
     return np.array([lat, lon])
+
+
+def nm_to_latlongalt(center: np.array, point: np.array) -> np.array:
+    """ Convert a point in nm to lat/long/alt coordinates
+    Parameters
+    __________
+    center: np.array
+        center point of the conversion
+    point: np.array
+        point to be converted
+    
+    Returns
+    __________
+    latlong: np.array
+        converted point in lat/long coordinates
+    """
+    lat = center[0] + (point[0] / 60)
+    lon = center[1] + (point[1] / (60 * np.cos(np.radians(center[0]))))
+    alt = center[2] + (point[2] / 60)
+    return np.array([lat, lon, alt])
 
 def latlong_to_nm(center: np.array, point: np.array) -> np.array:
     """ Convert a point in lat/long coordinates to nm
