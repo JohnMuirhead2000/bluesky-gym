@@ -192,6 +192,7 @@ class StaticObstacleEnv(gym.Env):
             self.obstacle_vertices.append(obstacle_vertices_coordinates)
             self.obstacle_radius.append(R)
 
+    # generates 1 and onlt 1 waypoint? our goal??
     def _generate_waypoint(self, acid = 'KL001'):
         # original _generate_waypoints function from horizotal_cr_env
         self.wpt_lat = []
