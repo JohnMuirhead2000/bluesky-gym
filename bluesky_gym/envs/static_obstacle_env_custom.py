@@ -25,12 +25,15 @@ OBSTACLE_DISTANCE_MAX = 150 # KM
 
 D_HEADING = 45 #degrees
 D_SPEED = 20/3 # kts (check)
+V_SPEED = 20/3 # kts (check) TODO confirm this value is correct. 
 
 AC_SPD = 150 # kts
-ALTITUDE = 350 # In FL
+INITIAL_ALTITUDE = 100 # In FL
+MAX_ALTITUDE = 1000
 
 NM2KM = 1.852
 MpS2Kt = 1.94384
+VMpS2Kt = 1.94384 # TODO investigate what this is
 
 ACTION_FREQUENCY = 10
 
@@ -40,7 +43,7 @@ NUM_WAYPOINTS = 1
 OBSTACLE_AREA_RANGE = (50, 1000) # In NM^2
 CENTER = (51.990426702297746, 4.376124857109851) # TU Delft AE Faculty coordinates
 
-MAX_DISTANCE = 350 # width of screen in km
+MAX_DISTANCE = 351 # width of screen in km
 
 class StaticObstacleEnv(gym.Env):
     """ 
@@ -65,12 +68,13 @@ class StaticObstacleEnv(gym.Env):
                 "restricted_area_radius": spaces.Box(0, 1, shape = (NUM_OBSTACLES,), dtype=np.float64),
                 "restricted_area_distance": spaces.Box(-np.inf, np.inf, shape = (NUM_OBSTACLES, ), dtype=np.float64),
                 "cos_difference_restricted_area_pos": spaces.Box(-np.inf, np.inf, shape = (NUM_OBSTACLES,), dtype=np.float64),
-                "sin_difference_restricted_area_pos": spaces.Box(-np.inf, np.inf, shape = (NUM_OBSTACLES,), dtype=np.float64)
+                "sin_difference_restricted_area_pos": spaces.Box(-np.inf, np.inf, shape = (NUM_OBSTACLES,), dtype=np.float64),
+                "z_r": spaces.Box(-np.inf, np.inf, shape=(NUM_OBSTACLES,), dtype=np.float64), # add the Z difference
 
             }
         )
        
-        self.action_space = spaces.Box(-1, 1, shape=(2,), dtype=np.float64)
+        self.action_space = spaces.Box(-1, 1, shape=(3,), dtype=np.float64)
 
         assert render_mode is None or render_mode in self.metadata["render_modes"]
         self.render_mode = render_mode
@@ -103,7 +107,9 @@ class StaticObstacleEnv(gym.Env):
         self.crashed = 0
         self.average_drift = np.array([])
 
-        bs.traf.cre('KL001',actype="A320",acspd=AC_SPD, acalt=ALTITUDE)
+        bs.traf.cre('KL001',actype="A320",acspd=AC_SPD, acalt=INITIAL_ALTITUDE)
+
+        bs.stack.stack("VNAV KL001 OFF")
 
         # defining screen coordinates
         # defining the reference point as the top left corner of the SQUARE screen
@@ -165,7 +171,8 @@ class StaticObstacleEnv(gym.Env):
         p = [fn.nm_to_latlong(centre, point) for point in p] # Convert to lat/long coordinateS
         return p_area, p, R
     
-    def _generate_obstacles(self):
+    # this function builds obstacle_names, obstacle_vertices and obstacle_radius for us. Add obstacle_height
+    def _generate_obstacles(self): 
         # delete existing obstacles from previous episode in BlueSky
         for name in self.obstacle_names:
             bs.tools.areafilter.deleteArea(name)
@@ -173,6 +180,7 @@ class StaticObstacleEnv(gym.Env):
         self.obstacle_names = []
         self.obstacle_vertices = []
         self.obstacle_radius = []
+        self.obstacle_height = []
 
         self._generate_coordinates_centre_obstacles(num_obstacles = NUM_OBSTACLES)
 
@@ -191,6 +199,7 @@ class StaticObstacleEnv(gym.Env):
             
             self.obstacle_vertices.append(obstacle_vertices_coordinates)
             self.obstacle_radius.append(R)
+            self.obstacle_height.append(np.random.uniform(0, MAX_ALTITUDE)) # pick a random heigh from 0 - 1000
 
     def _generate_waypoint(self, acid = 'KL001'):
         # original _generate_waypoints function from horizotal_cr_env
@@ -244,9 +253,16 @@ class StaticObstacleEnv(gym.Env):
         self.obstacle_centre_distance = []
         self.obstacle_centre_cos_bearing = []
         self.obstacle_centre_sin_bearing = []
+
+        self.alt_difference = []
             
         self.ac_hdg = bs.traf.hdg[ac_idx]
         self.ac_tas = bs.traf.tas[ac_idx]
+
+        agent_altitude = bs.traf.alt[ac_idx]
+        #print(f"thing = {bs.traf.selvs[ac_idx]}")
+        print(f"VS = {bs.traf.vs[ac_idx]}")
+        print(f"altitude = {agent_altitude}")
 
         wpt_qdr, wpt_dis = bs.tools.geo.kwikqdrdist(bs.traf.lat[ac_idx], bs.traf.lon[ac_idx], self.wpt_lat[0], self.wpt_lon[0])
     
@@ -270,6 +286,7 @@ class StaticObstacleEnv(gym.Env):
             self.obstacle_centre_distance.append(obs_centre_dis)
             self.obstacle_centre_cos_bearing.append(np.cos(np.deg2rad(bearing)))
             self.obstacle_centre_sin_bearing.append(np.sin(np.deg2rad(bearing)))
+            self.alt_difference.append(agent_altitude - self.obstacle_height[obs_idx])
 
         observation = {
                 "destination_waypoint_distance": np.array(self.destination_waypoint_distance)/WAYPOINT_DISTANCE_MAX,
@@ -279,6 +296,7 @@ class StaticObstacleEnv(gym.Env):
                 "restricted_area_distance": np.array(self.obstacle_centre_distance)/WAYPOINT_DISTANCE_MAX,
                 "cos_difference_restricted_area_pos": np.array(self.obstacle_centre_cos_bearing),
                 "sin_difference_restricted_area_pos": np.array(self.obstacle_centre_sin_bearing),
+                "z_r": np.array(self.alt_difference)
             }
 
         return observation
@@ -326,6 +344,8 @@ class StaticObstacleEnv(gym.Env):
         self.average_drift = np.append(self.average_drift, drift)
         return drift * DRIFT_PENALTY
 
+
+    # TODO double check this function!
     def _check_intrusion(self):
         ac_idx = bs.traf.id2idx('KL001')
         reward = 0
@@ -340,11 +360,19 @@ class StaticObstacleEnv(gym.Env):
     def _get_action(self,action):
         dh = action[0] * D_HEADING
         dv = action[1] * D_SPEED
+        vs = action[2]
         heading_new = fn.bound_angle_positive_negative_180(bs.traf.hdg[bs.traf.id2idx('KL001')] + dh)
         speed_new = (bs.traf.cas[bs.traf.id2idx('KL001')] + dv) * MpS2Kt
 
         bs.stack.stack(f"HDG {'KL001'} {heading_new}")
         bs.stack.stack(f"SPD {'KL001'} {speed_new}")
+        # The actions are then executed through stack commands;
+        if vs >= 0:
+            bs.traf.selalt[0] = 1000000 # High target altitude to start climb
+            bs.traf.selvs[0] = vs
+        elif vs < 0:
+            bs.traf.selalt[0] = 0 # High target altitude to start descent
+            bs.traf.selvs[0] = vs
 
     def _render_frame(self):
         if self.window is None and self.render_mode == "human":

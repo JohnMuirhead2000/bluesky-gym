@@ -115,7 +115,7 @@ class StaticObstacleEnv(gym.Env):
         self.screen_coords = [lat_ref_point,lon_ref_point]#[52.9, 2.6]
 
         self._generate_obstacles()
-        self._generate_waypoint()
+        self._generate_waypoint() # we need 1 and only 1 way point. It is the GOAL destination. 
 
         ac_idx = bs.traf.id2idx('KL001')
         self.initial_wpt_qdr, _ = bs.tools.geo.kwikqdrdist(bs.traf.lat[ac_idx], bs.traf.lon[ac_idx], self.wpt_lat[0], self.wpt_lon[0])
@@ -343,7 +343,7 @@ class StaticObstacleEnv(gym.Env):
         dv = action[1] * D_SPEED
         heading_new = fn.bound_angle_positive_negative_180(bs.traf.hdg[bs.traf.id2idx('KL001')] + dh)
         speed_new = (bs.traf.cas[bs.traf.id2idx('KL001')] + dv) * MpS2Kt
-
+        
         bs.stack.stack(f"HDG {'KL001'} {heading_new}")
         bs.stack.stack(f"SPD {'KL001'} {speed_new}")
 

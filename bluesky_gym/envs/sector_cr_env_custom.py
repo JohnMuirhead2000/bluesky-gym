@@ -291,7 +291,7 @@ class SectorCREnv(gym.Env):
         vz = bs.traf.vs # TODO, Check on this, but vs is likley vertical speed
 
         ac_loc = fn.latlongalt_to_nm(CENTER, np.array([bs.traf.lat[ac_idx], bs.traf.lon[ac_idx], bs.traf.lat[ac_idx]])) * NM2KM * 1000 # Two-step conversion lat/long -> NM -> m
-        distances = [fn.euclidean_distance(ac_loc, fn.latlongalt_to_nm(CENTER, np.array([bs.traf.lat[i], bs.traf.lon[i], bs.traf.lat[i]])) * NM2KM * 1000) for i in range(1, self.num_ac)]
+        distances = [fn.euclidean_distance(ac_loc, fn.latlongalt_to_nm(CENTER, np.array([bs.traf.lat[i], bs.traf.lon[i], bs.traf.alt[i]])) * NM2KM * 1000) for i in range(1, self.num_ac)]
         ac_idx_by_dist = np.argsort(distances)
 
         for i in range(self.num_ac-1):
@@ -341,15 +341,21 @@ class SectorCREnv(gym.Env):
 
         dh = action[0] * D_HEADING
         dv = action[1] * D_VELOCITY
-        vs = action[2] * V_SPEED
+        vs = action[2]
 
         heading_new = fn.bound_angle_positive_negative_180(bs.traf.hdg[bs.traf.id2idx(ACTOR)] + dh)
         speed_new = (bs.traf.cas[bs.traf.id2idx(ACTOR)] + dv) * MpS2Kt
-        vertical_speed_new = (bs.traf.cas[bs.traf.id2idx(ACTOR)] + vs) * VMpS2Kt # TODO investigate if this is how we should do this
 
         bs.stack.stack(f"HDG {ACTOR} {heading_new}")
         bs.stack.stack(f"SPD {ACTOR} {speed_new}")
-        bs.stack.stack(f"VSPD {ACTOR} {vertical_speed_new}")
+
+        # The actions are then executed through stack commands;
+        if vs >= 0:
+            bs.traf.selalt[0] = 1000000 # High target altitude to start climb
+            bs.traf.selvs[0] = vs
+        elif vs < 0:
+            bs.traf.selalt[0] = 0 # High target altitude to start descent
+            bs.traf.selvs[0] = vs
 
     # this can prob stay the same
     def _check_drift(self):
