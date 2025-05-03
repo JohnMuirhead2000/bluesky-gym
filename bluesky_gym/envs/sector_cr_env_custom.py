@@ -38,7 +38,6 @@ DRIFT_PENALTY = -0.1
 INTRUSION_PENALTY = -1
 D_HEADING = 22.5 # deg
 D_VELOCITY = 20/3 # kts
-V_SPEED = 20/3 # kts, TODO investigate what this should be
 
 class SectorCREnv(gym.Env):
     """ 
@@ -371,7 +370,7 @@ class SectorCREnv(gym.Env):
         for i in range(self.num_ac-1):
             int_idx = i+1
             _, flat_dist = bs.tools.geo.kwikqdrdist(bs.traf.lat[ac_idx], bs.traf.lon[ac_idx], bs.traf.lat[int_idx], bs.traf.lon[int_idx])
-            vertical_dist = abs(bs.traf.alt[ac_idx] - bs.traf.alt[int_idx])
+            vertical_dist = abs(bs.traf.alt[ac_idx] - bs.traf.alt[int_idx]) # check units for altitude
             int_dis = math.sqrt(flat_dist**2 + vertical_dist**2)
             
             if int_dis < INTRUSION_DISTANCE:
@@ -396,6 +395,7 @@ class SectorCREnv(gym.Env):
 
         canvas = pygame.Surface(self.window_size)
         canvas.fill((135,206,235))
+
         
         # Draw airspace
         airspace_color = (255, 0, 0)
@@ -419,6 +419,35 @@ class SectorCREnv(gym.Env):
             ((x_pos)+heading_end_x,(y_pos)-heading_end_y),
             width = 4
         )
+
+        # Draw coordinatres:
+
+        # Get agent position data
+        lat = bs.traf.lat[ac_idx]
+        lon = bs.traf.lon[ac_idx]
+        alt = bs.traf.alt[ac_idx]
+
+        # Format text
+        font = pygame.font.Font(None, 24)  # Default font, size 24
+        lat_text = font.render(f"Lat: {lat:.4f}", True, (0, 0, 0))
+        lon_text = font.render(f"Lon: {lon:.4f}", True, (0, 0, 0))
+        alt_text = font.render(f"Alt: {alt:.0f} ft", True, (0, 0, 0))
+
+        # Define box position and size
+        padding = 10
+        box_width = 150
+        box_height = 60
+        box_x = self.window_width - box_width - padding
+        box_y = padding
+
+        # Draw background box
+        pygame.draw.rect(canvas, (255, 255, 255), (box_x, box_y, box_width, box_height))
+        pygame.draw.rect(canvas, (0, 0, 0), (box_x, box_y, box_width, box_height), 1)  # Border
+
+        # Blit text onto canvas
+        canvas.blit(lat_text, (box_x + 5, box_y + 5))
+        canvas.blit(lon_text, (box_x + 5, box_y + 25))
+        canvas.blit(alt_text, (box_x + 5, box_y + 45))
 
         # Draw heading line
         heading_length = 20
@@ -479,6 +508,25 @@ class SectorCREnv(gym.Env):
                 radius = INTRUSION_DISTANCE*NM2KM*px_per_km,
                 width = 2
             )
+
+            # Intruder position data
+            lat = bs.traf.lat[int_idx]
+            lon = bs.traf.lon[int_idx]
+            alt = bs.traf.alt[int_idx]
+
+            # Small font for intruder data
+            tiny_font = pygame.font.Font(None, 14)
+            lat_text = tiny_font.render(f"{lat:.2f}", True, color)
+            lon_text = tiny_font.render(f"{lon:.2f}", True, color)
+            alt_text = tiny_font.render(f"{alt:.0f}", True, color)
+
+            # Position slightly offset from the intruder symbol
+            text_offset_x = 5
+            text_offset_y = -20
+
+            canvas.blit(lat_text, (x_pos + text_offset_x, y_pos + text_offset_y))
+            canvas.blit(lon_text, (x_pos + text_offset_x, y_pos + text_offset_y + 10))
+            canvas.blit(alt_text, (x_pos + text_offset_x, y_pos + text_offset_y + 20))
 
         self.window.blit(canvas, canvas.get_rect())
         pygame.display.update()

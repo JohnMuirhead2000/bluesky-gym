@@ -408,6 +408,35 @@ class StaticObstacleEnv(gym.Env):
             width = 5
         )
 
+        # Draw coordinatres:
+
+        # Get agent position data
+        lat = bs.traf.lat[ac_idx]
+        lon = bs.traf.lon[ac_idx]
+        alt = bs.traf.alt[ac_idx]
+
+        # Format text
+        font = pygame.font.Font(None, 24)  # Default font, size 24
+        lat_text = font.render(f"Lat: {lat:.4f}", True, (0, 0, 0))
+        lon_text = font.render(f"Lon: {lon:.4f}", True, (0, 0, 0))
+        alt_text = font.render(f"Alt: {alt:.0f} ft", True, (0, 0, 0))
+
+        # Define box position and size
+        padding = 10
+        box_width = 150
+        box_height = 60
+        box_x = self.window_width - box_width - padding
+        box_y = padding
+
+        # Draw background box
+        pygame.draw.rect(canvas, (255, 255, 255), (box_x, box_y, box_width, box_height))
+        pygame.draw.rect(canvas, (0, 0, 0), (box_x, box_y, box_width, box_height), 1)  # Border
+
+        # Blit text onto canvas
+        canvas.blit(lat_text, (box_x + 5, box_y + 5))
+        canvas.blit(lon_text, (box_x + 5, box_y + 25))
+        canvas.blit(alt_text, (box_x + 5, box_y + 45))
+
         # draw heading line
         heading_length = 50
         heading_end_x = ((np.sin(np.deg2rad(bs.traf.hdg[ac_idx])) * heading_length)/MAX_DISTANCE)*self.window_width
@@ -421,19 +450,30 @@ class StaticObstacleEnv(gym.Env):
         )
 
         # draw obstacles
-        for vertices in self.obstacle_vertices:
+        for idx, vertices in enumerate(self.obstacle_vertices):
             points = []
             for coord in vertices:
                 lat_ref = coord[0]
                 lon_ref = coord[1]
                 qdr, dis = bs.tools.geo.kwikqdrdist(screen_coords[0], screen_coords[1], lat_ref, lon_ref)
-                dis = dis*NM2KM
-                x_ref = (np.sin(np.deg2rad(qdr))*dis)/MAX_DISTANCE*self.window_width
-                y_ref = (-np.cos(np.deg2rad(qdr))*dis)/MAX_DISTANCE*self.window_width
+                dis = dis * NM2KM
+                x_ref = (np.sin(np.deg2rad(qdr)) * dis) / MAX_DISTANCE * self.window_width
+                y_ref = (-np.cos(np.deg2rad(qdr)) * dis) / MAX_DISTANCE * self.window_width
                 points.append((x_ref, y_ref))
-            pygame.draw.polygon(canvas,
-                (0,0,0), points
-            )
+
+            # Draw the obstacle polygon
+            pygame.draw.polygon(canvas, (0, 0, 0), points)
+
+            # Draw height in the center of the polygon
+            if points:
+                x_coords, y_coords = zip(*points)
+                center_x = sum(x_coords) / len(x_coords)
+                center_y = sum(y_coords) / len(y_coords)
+
+                height = self.obstacle_height[idx]  # get height for this obstacle
+                font = pygame.font.Font(None, 16)
+                height_text = font.render(f"{height:.0f} ft", True, (255, 255, 255))
+                canvas.blit(height_text, (center_x - 10, center_y - 8))
 
         # draw target waypoint
         indx = 0
