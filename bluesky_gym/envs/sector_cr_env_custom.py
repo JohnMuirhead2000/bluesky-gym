@@ -12,22 +12,33 @@ from gymnasium import spaces
 AC_DENSITY_RANGE = (0.003, 0.007) # In AC/NM^2
 AC_DENSITY_MU = 0.005 # In AC/NM^2
 AC_DENSITY_SIGMA = 0.001 # In AC/NM^2
+ALT_MEAN = 1500
+ALT_STD = 3000
+VZ_MEAN = 0
+VZ_STD = 5
 
-POLY_AREA_RANGE = (2400, 3750) # In NM^2
-CENTER = np.array([51.990426702297746, 4.376124857109851]) # TU Delft AE Faculty coordinates, 350 is meters?? idk
+POLY_AREA_RANGE = (2400, 3750) # In NM^2 The size of the simulator in nautical miles
+CENTER = np.array([51.990426702297746, 4.376124857109851]) # the center golbal coords ofthe simulator
 MIN_ALTITUDE = 0 #
-MAX_ALTITUDE = 1000
+MAX_ALTITUDE = 1000 # the minimuim altitude in FL (10,000 feet)
 
 # Aircraft parameters
-AC_SPD = 150
+AC_SPD = 150 # in knots
 AC_TYPE = "A320"
 ACTOR = "KL001" # this is OUR aircraft
 
 # Conversion factors
-NM2KM = 1.852
-MpS2Kt = 1.94384 # This 'conversion factor' is used when calculating the horizontal speed
-VMpS2Kt = 1.94384 # TODO invesitgate if this is how we should use this
-FL2M = 30.48
+NM2KM = 1.852 # natucal miles to kilometer
+MpS2Kt = 1.94384 # speed conversion. From meters / seconds to knots
+FL2M = 30.48 # flight level to kilometers. So FL350 = 35,000. 
+FL2NM = 0.0164579 # flight level to nautical mils
+NM2FL = 60.76
+FL2F = 100 # flight level to feet
+
+M2FL = .0328 #M to flight level
+
+NM2M = 1852 # nautical miles to meters
+NM2FT = 6076.12 # Nautical miles to feet. 
 
 INTRUSION_DISTANCE = 5 # NM
 
@@ -45,7 +56,13 @@ class SectorCREnv(gym.Env):
     """
     metadata = {"render_modes": ["rgb_array","human"], "render_fps": 120}
     
-    def __init__(self, render_mode=None, ac_density_mode="normal"):
+    def __init__(self, render_mode=None, ac_density_mode="normal", test_mode=False, test_dictionary={}):
+
+
+        # test stuff:
+        self.test_mode = test_mode
+        self.test_dictionary = test_dictionary
+
         self.window_width = 512
         self.window_height = 512
         self.window_size = (self.window_width, self.window_height) # Size of the rendered environment
@@ -53,16 +70,18 @@ class SectorCREnv(gym.Env):
         self.poly_name = 'airspace'
         # Feel free to add more observation spaces
         self.observation_space = spaces.Dict(
-            {
+            {   
+                "altitude": spaces.Box(-np.inf, np.inf, dtype=np.float64), # ownship vertical speed
+                "altitude_difference": spaces.Box(-np.inf, np.inf, shape = (NUM_AC_STATE,), dtype=np.float64), # 
+                "vz": spaces.Box(-np.inf, np.inf, dtype=np.float64), # ownship vertical speed
+                "z_difference_speed": spaces.Box(-np.inf, np.inf, shape = (NUM_AC_STATE,), dtype=np.float64), # difference in vertical speed
                 "cos(drift)": spaces.Box(-1, 1, shape=(1,), dtype=np.float64),
                 "sin(drift)": spaces.Box(-1, 1, shape=(1,), dtype=np.float64),
                 "airspeed": spaces.Box(-1, 1, shape=(1,), dtype=np.float64),
                 "x_r": spaces.Box(-np.inf, np.inf, shape=(NUM_AC_STATE,), dtype=np.float64),
                 "y_r": spaces.Box(-np.inf, np.inf, shape=(NUM_AC_STATE,), dtype=np.float64),
-                "z_r": spaces.Box(-np.inf, np.inf, shape=(NUM_AC_STATE,), dtype=np.float64),
                 "vx_r": spaces.Box(-np.inf, np.inf, shape=(NUM_AC_STATE,), dtype=np.float64),
                 "vy_r": spaces.Box(-np.inf, np.inf, shape=(NUM_AC_STATE,), dtype=np.float64),
-                "vz_r": spaces.Box(-np.inf, np.inf, shape=(NUM_AC_STATE,), dtype=np.float64),
                 "cos(track)": spaces.Box(-np.inf, np.inf, shape=(NUM_AC_STATE,), dtype=np.float64),
                 "sin(track)": spaces.Box(-np.inf, np.inf, shape=(NUM_AC_STATE,), dtype=np.float64),
                 "distances": spaces.Box(-np.inf, np.inf, shape=(NUM_AC_STATE,), dtype=np.float64)
@@ -106,6 +125,10 @@ class SectorCREnv(gym.Env):
         else:
             rand_density = np.random.uniform(*AC_DENSITY_RANGE)
             self.num_ac = int(max(np.ceil(rand_density * self.poly_area), NUM_AC_STATE+1)) # Get total number of AC in the airspace including agent (min = 3)
+
+        if self.test_mode:
+            if self.test_dictionary["num_ac"] is not None:
+                self.num_ac = self.test_dictionary["num_ac"]
         
         self._generate_waypoints() # Create waypoints for aircraft
         self._generate_ac() # Create aircraft in the airspace
@@ -143,26 +166,49 @@ class SectorCREnv(gym.Env):
         else:
             return True
 
+
     def _generate_polygon(self):
-        
+
+        # --- Deterministic square polygon if in test mode and specified ---
+        if self.test_mode and self.test_dictionary.get("map") == "square":
+            side_lenth = 100  # fixed side length in nm
+            half_side = side_lenth / 2
+
+            # Define square centered on (0, 0) in local coordinates
+            square_nm = [
+                [-half_side, -half_side],
+                [ half_side, -half_side],
+                [ half_side,  half_side],
+                [-half_side,  half_side]
+            ]
+            
+            self.poly_points = np.array(square_nm)
+            self.poly_area = fn.polygon_area(square_nm)
+
+            # Convert to lat/long for defining in areafilter
+            square_latlon = [fn.nm_to_latlong(CENTER, point) for point in square_nm]
+            points = [coord for point in square_latlon for coord in point]  # flatten
+            bs.tools.areafilter.defineArea(self.poly_name, 'POLY', points)
+            return
+
+        # --- Default random polygon generation ---
         R = np.sqrt(POLY_AREA_RANGE[1] / np.pi)
-        p = [fn.random_point_on_circle(R) for _ in range(3)] # 3 random points to start building the polygon
+        p = [fn.random_point_on_circle(R) for _ in range(3)]
         p = fn.sort_points_clockwise(p)
         p_area = fn.polygon_area(p)
-        
+
         while p_area < POLY_AREA_RANGE[0]:
             p.append(fn.random_point_on_circle(R))
             p = fn.sort_points_clockwise(p)
             p_area = fn.polygon_area(p)
-        
+
         self.poly_area = p_area
-        
-        self.poly_points = np.array(p) # Polygon vertices are saved in terms of NM
-        
-        p = [fn.nm_to_latlong(CENTER, point) for point in p] # Convert to lat/long/alt coordinateS
-        
-        points = [coord for point in p for coord in point] # Flatten the list of points
+        self.poly_points = np.array(p)
+
+        latlon_points = [fn.nm_to_latlong(CENTER, point) for point in p]
+        points = [coord for point in latlon_points for coord in point]
         bs.tools.areafilter.defineArea(self.poly_name, 'POLY', points)
+
     
 
     # This  (I think!) builds the path for each intruder. For now, its fine if it keeps the same altitude so this can be ignored
@@ -221,10 +267,11 @@ class SectorCREnv(gym.Env):
         hdg_agent = fn.get_hdg(flat_pos_agent, wpt_agent)
         
         # Actor AC is the only one that has ACTOR as acid. acalt is set to ALTITUDE for all of them. 
+        # The alitude should been in FL  (feet * 10,000)
         bs.traf.cre(ACTOR, actype=AC_TYPE, aclat=flat_pos_agent[0], aclon=flat_pos_agent[1], acalt=init_alt_agent, achdg=hdg_agent, acspd=AC_SPD)
         
         for i in range(1, len(init_p_latlongalt)):
-            wpt = fn.nm_to_latlong(CENTER, self.wpts[i])
+            wpt = fn.nm_to_latlong(CENTER, self.wpts[i]) # get the latitude and longitude of the waypoint
             init_pos = init_p_latlongalt[i]
             flat_pos = init_pos[:2]
             init_alt = init_pos[2]
@@ -267,6 +314,11 @@ class SectorCREnv(gym.Env):
         self.sin_track = np.array([])
         self.distances = np.array([])
 
+        self.altitude = bs.traf.alt[0]
+        self.altitude_difference = []
+        self.vz = bs.traf.vs[0]
+        self.z_difference_speed = []
+
         # Drift of agent aircraft for reward calculation
         drift = 0
 
@@ -290,7 +342,7 @@ class SectorCREnv(gym.Env):
         vz = bs.traf.vs # TODO, Check on this, but vs is likley vertical speed
 
         ac_loc = fn.latlongalt_to_nm(CENTER, np.array([bs.traf.lat[ac_idx], bs.traf.lon[ac_idx], bs.traf.lat[ac_idx]])) * NM2KM * 1000 # Two-step conversion lat/long -> NM -> m
-        distances = [fn.euclidean_distance(ac_loc, fn.latlongalt_to_nm(CENTER, np.array([bs.traf.lat[i], bs.traf.lon[i], bs.traf.alt[i]])) * NM2KM * 1000) for i in range(1, self.num_ac)]
+        distances = [fn.euclidean_distance(ac_loc, fn.latlongalt_to_nm(CENTER, np.array([bs.traf.lat[i], bs.traf.lon[i], bs.traf.alt[i]*M2FL*FL2NM])) * NM2KM * 1000) for i in range(1, self.num_ac)]
         ac_idx_by_dist = np.argsort(distances)
 
         for i in range(self.num_ac-1):
@@ -316,18 +368,31 @@ class SectorCREnv(gym.Env):
             self.cos_track = np.append(self.cos_track, np.cos(track))
             self.sin_track = np.append(self.sin_track, np.sin(track))
 
-            self.distances = np.append(self.distances, distances[ac_idx-1]) #TODO ap
+            self.distances = np.append(self.distances, distances[ac_idx-1])
+
+            alt_dif = bs.traf.alt[ac_idx] - self.altitude
+            vz_dif = bs.traf.vs[ac_idx] - self.vz
+
+            self.altitude_difference.append(alt_dif)
+            self.z_difference_speed.append(vz_dif)
+
+
+        obs_altitude = np.array([(self.altitude - ALT_MEAN)/ALT_STD])
+        obs_vz = np.array([(self.vz - VZ_MEAN) / VZ_STD])
 
         observation = {
+
+            "altitude":  obs_altitude,
+            "altitude_difference": np.array(self.altitude_difference)/ALT_STD,
+            "vz": obs_vz, 
+            "z_difference_speed": np.array(self.z_difference_speed),
             "cos(drift)": self.cos_drift,
             "sin(drift)": self.sin_drift,
             "airspeed": (self.airspeed-150)/6,
             "x_r": self.x_r[:NUM_AC_STATE]/13000,
             "y_r": self.y_r[:NUM_AC_STATE]/13000,
-            "z_r": self.z_r[:NUM_AC_STATE]/13000,
             "vx_r": self.vx_r[:NUM_AC_STATE]/32,
             "vy_r": self.vy_r[:NUM_AC_STATE]/66,
-            "vz_r": self.vz_r[:NUM_AC_STATE]/66, # double check the value of 66
             "cos(track)": self.cos_track[:NUM_AC_STATE],
             "sin(track)": self.sin_track[:NUM_AC_STATE],
             "distances": (self.distances[:NUM_AC_STATE]-50000.)/15000.
@@ -338,23 +403,26 @@ class SectorCREnv(gym.Env):
     # this has been updated but it always pays to double check :D
     def _get_action(self, action):
 
-        dh = action[0] * D_HEADING
-        dv = action[1] * D_VELOCITY
+        dh = action[0] * D_HEADING # discrete heading chage. This can only be -1, 1, or 0
+        dv = action[1] * D_VELOCITY # how many (meters / second) we wish to add to the speed 
         vs = action[2]
 
         heading_new = fn.bound_angle_positive_negative_180(bs.traf.hdg[bs.traf.id2idx(ACTOR)] + dh)
-        speed_new = (bs.traf.cas[bs.traf.id2idx(ACTOR)] + dv) * MpS2Kt
+        speed_new = (bs.traf.cas[bs.traf.id2idx(ACTOR)] + dv) * MpS2Kt #meters / seconds to knots
 
-        bs.stack.stack(f"HDG {ACTOR} {heading_new}")
-        bs.stack.stack(f"SPD {ACTOR} {speed_new}")
+        bs.stack.stack(f"HDG {ACTOR} {heading_new}") # gives the disired heading in degrees
+        bs.stack.stack(f"SPD {ACTOR} {speed_new}") # give the desired speed in knots
 
         # The actions are then executed through stack commands;
-        if vs >= 0:
-            bs.traf.selalt[0] = 1000000 # High target altitude to start climb
+        if vs > 0:
+            bs.traf.selalt[0] = MAX_ALTITUDE # High target altitude to start climb
             bs.traf.selvs[0] = vs
         elif vs < 0:
-            bs.traf.selalt[0] = 0 # High target altitude to start descent
+            bs.traf.selalt[0] = 0 # Low target
             bs.traf.selvs[0] = vs
+        elif vs == 0:
+            ac_idx = bs.traf.id2idx(ACTOR)
+            bs.traf.selalt[0] = bs.traf.alt[ac_idx]
 
     # this can prob stay the same
     def _check_drift(self):
@@ -363,15 +431,15 @@ class SectorCREnv(gym.Env):
         return drift * DRIFT_PENALTY
     
 
-    # this will need an update. ALL SET
     def _check_intrusion(self):
         ac_idx = bs.traf.id2idx(ACTOR)
         reward = 0
         for i in range(self.num_ac-1):
             int_idx = i+1
             _, flat_dist = bs.tools.geo.kwikqdrdist(bs.traf.lat[ac_idx], bs.traf.lon[ac_idx], bs.traf.lat[int_idx], bs.traf.lon[int_idx])
-            vertical_dist = abs(bs.traf.alt[ac_idx] - bs.traf.alt[int_idx]) # check units for altitude
-            int_dis = math.sqrt(flat_dist**2 + vertical_dist**2)
+            vertical_dist = abs(bs.traf.alt[ac_idx] - bs.traf.alt[int_idx]) # vertical_dist is in meters
+            vinnm = vertical_dist * M2FL * FL2NM # vinnm is in meters. Convert to Flight Level. Convert to nautical miles. 
+            int_dis = math.sqrt(flat_dist**2 + vinnm**2)
             
             if int_dis < INTRUSION_DISTANCE:
                 self.total_intrusions += 1
@@ -431,7 +499,7 @@ class SectorCREnv(gym.Env):
         font = pygame.font.Font(None, 24)  # Default font, size 24
         lat_text = font.render(f"Lat: {lat:.4f}", True, (0, 0, 0))
         lon_text = font.render(f"Lon: {lon:.4f}", True, (0, 0, 0))
-        alt_text = font.render(f"Alt: {alt:.0f} ft", True, (0, 0, 0))
+        alt_text = font.render(f"Alt: {alt:.0f} FL", True, (0, 0, 0))
 
         # Define box position and size
         padding = 10
@@ -534,3 +602,69 @@ class SectorCREnv(gym.Env):
     
     def close(self):
         pass
+
+    # TEST FUNCTIONS - used in the testing framework:
+
+    def get_altitudes(self): # get the altitude of every aircraft.
+        altitudes = []
+        ac_idx = bs.traf.id2idx(ACTOR) # the ID of the ownship
+        for i in range(self.num_ac-1):
+            ac_idx = ac_idx + 1
+            altitude = bs.traf.alt[ac_idx]
+            altitudes.append(altitude)
+
+        return altitudes
+    
+
+    def get_positions(self): # get the altitude of every aircraft.
+        positions = []
+        ac_idx = bs.traf.id2idx(ACTOR) # the ID of the ownship
+        for i in range(self.num_ac-1):
+            ac_idx = ac_idx + 1
+            longitude = bs.traf.lon[ac_idx]
+            latitude = bs.traf.lat[ac_idx]
+            altitude = bs.traf.alt[ac_idx]
+            position = (longitude, latitude, altitude)
+            positions.append(position)
+        return positions
+    
+    # returns [lat, lon] of the ownship
+    def get_ownship_position(self):
+        ac_idx = bs.traf.id2idx(ACTOR)
+        longitude = bs.traf.lon[ac_idx]
+        latitude = bs.traf.lat[ac_idx]
+        altitude = bs.traf.alt[ac_idx]
+        return (longitude, latitude, altitude)
+    
+    def move_ownship(self, info):
+        # info = [lat,lon,alt,hdg,spd,vspd]
+        x = info[0]
+        y = info[1]
+        z = info[2]
+        heading = info[3]
+        spd = info[4]
+        vspd = info[5]
+        bs.stack.stack(f"MOVE {ACTOR} {x} {y} {z} {heading} {spd} {vspd}")
+        bs.sim.step()
+        if self.render_mode == "human":              
+            self._render_frame()
+
+    # move all intrudors to the same, specified, longitude, latitude, altitue (in feet)
+    def move_all_intrudors(self, info):
+        # info = [lat,lon,alt,hdg,spd,vspd]
+        x = info[0]
+        y = info[1]
+        z = info[2]
+        heading = info[3]
+        spd = info[4]
+        vspd = info[5]
+
+        ac_idx = bs.traf.id2idx(ACTOR) # the ID of the ownship
+        for i in range(self.num_ac-1):
+            ac_idx = ac_idx + 1
+            bs.stack.stack(f"MOVE {ac_idx} {x} {y} {z} {heading} {spd} {vspd}")
+            bs.sim.step()
+            if self.render_mode == "human":              
+                self._render_frame()
+        
+
