@@ -314,10 +314,10 @@ class SectorCREnv(gym.Env):
         self.sin_track = np.array([])
         self.distances = np.array([])
 
-        self.altitude = bs.traf.alt[0]
-        self.altitude_difference = []
-        self.vz = bs.traf.vs[0]
-        self.z_difference_speed = []
+        self.altitude = bs.traf.alt[ac_idx]
+        self.vz = bs.traf.vs[ac_idx]
+        self.altitude_difference = np.array([])
+        self.z_difference_speed = np.array([])
 
         # Drift of agent aircraft for reward calculation
         drift = 0
@@ -373,8 +373,8 @@ class SectorCREnv(gym.Env):
             alt_dif = bs.traf.alt[ac_idx] - self.altitude
             vz_dif = bs.traf.vs[ac_idx] - self.vz
 
-            self.altitude_difference.append(alt_dif)
-            self.z_difference_speed.append(vz_dif)
+            self.altitude_difference = np.append(alt_dif)
+            self.z_difference_speed = np.append(vz_dif)
 
 
         obs_altitude = np.array([(self.altitude - ALT_MEAN)/ALT_STD])
@@ -383,9 +383,9 @@ class SectorCREnv(gym.Env):
         observation = {
 
             "altitude":  obs_altitude,
-            "altitude_difference": np.array(self.altitude_difference)/ALT_STD,
+            "altitude_difference": self.altitude_difference[:NUM_AC_STATE]/ALT_STD,
             "vz": obs_vz, 
-            "z_difference_speed": np.array(self.z_difference_speed),
+            "z_difference_speed": self.z_difference_speed[:NUM_AC_STATE],
             "cos(drift)": self.cos_drift,
             "sin(drift)": self.sin_drift,
             "airspeed": (self.airspeed-150)/6,

@@ -10,6 +10,10 @@ import gymnasium as gym
 from gymnasium import spaces
 
 DISTANCE_MARGIN = 5 # km
+ALT_MEAN = 1500
+ALT_STD = 3000
+VZ_MEAN = 0
+VZ_STD = 5
 
 REACH_REWARD = 1 # reach set waypoint
 DRIFT_PENALTY = -0.01
@@ -19,6 +23,8 @@ INTRUSION_DISTANCE = 5 # NM
 
 WAYPOINT_DISTANCE_MIN = 100 # KM
 WAYPOINT_DISTANCE_MAX = 170 # KM
+
+WAYPOINT_ALT_MAX = 1000 #NM
 
 OBSTACLE_DISTANCE_MIN = 20 # KM
 OBSTACLE_DISTANCE_MAX = 150 # KM
@@ -61,7 +67,11 @@ class StaticObstacleEnv(gym.Env):
         self.window_size = (self.window_width, self.window_height) # Size of the rendered environment
 
         self.observation_space = spaces.Dict(
-            {   
+            {
+                "altitude": spaces.Box(-np.inf, np.inf, dtype=np.float64), # ownship vertical speed
+                "altitude_differences": spaces.Box(-np.inf, np.inf, shape = (NUM_OBSTACLES,), dtype=np.float64), # 
+                "vz": spaces.Box(-np.inf, np.inf, dtype=np.float64), # ownship vertical speed  
+                "altitude_waypoint_distance": spaces.Box(-np.inf, np.inf, shape = (1,), dtype=np.float64), 
                 "destination_waypoint_distance": spaces.Box(-np.inf, np.inf, shape = (1,), dtype=np.float64),
                 "destination_waypoint_cos_drift": spaces.Box(-np.inf, np.inf, shape = (1,), dtype=np.float64),
                 "destination_waypoint_sin_drift": spaces.Box(-np.inf, np.inf, shape = (1,), dtype=np.float64),
@@ -69,8 +79,6 @@ class StaticObstacleEnv(gym.Env):
                 "restricted_area_distance": spaces.Box(-np.inf, np.inf, shape = (NUM_OBSTACLES, ), dtype=np.float64),
                 "cos_difference_restricted_area_pos": spaces.Box(-np.inf, np.inf, shape = (NUM_OBSTACLES,), dtype=np.float64),
                 "sin_difference_restricted_area_pos": spaces.Box(-np.inf, np.inf, shape = (NUM_OBSTACLES,), dtype=np.float64),
-                "z_r": spaces.Box(-np.inf, np.inf, shape=(NUM_OBSTACLES,), dtype=np.float64), # add the Z difference
-
             }
         )
        
@@ -205,6 +213,7 @@ class StaticObstacleEnv(gym.Env):
         # original _generate_waypoints function from horizotal_cr_env
         self.wpt_lat = []
         self.wpt_lon = []
+        self.wpt_alt = []
         self.wpt_reach = []
 
         ac_idx = bs.traf.id2idx(acid)
@@ -215,6 +224,7 @@ class StaticObstacleEnv(gym.Env):
             wpt_dis_init = np.random.randint(WAYPOINT_DISTANCE_MIN, WAYPOINT_DISTANCE_MAX)
             wpt_hdg_init = np.random.randint(0, 360)
             wpt_lat, wpt_lon = fn.get_point_at_distance(bs.traf.lat[ac_idx], bs.traf.lon[ac_idx], wpt_dis_init, wpt_hdg_init)
+            wpt_alt = np.random.rand() * WAYPOINT_ALT_MAX
 
             inside_temp = []
             for j in range(NUM_OBSTACLES):
@@ -226,6 +236,7 @@ class StaticObstacleEnv(gym.Env):
 
         self.wpt_lat.append(wpt_lat)
         self.wpt_lon.append(wpt_lon)
+        self.wpt_alt.append(wpt_alt)
         self.wpt_reach.append(0)
 
     def _generate_coordinates_centre_obstacles(self, acid = 'KL001', num_obstacles = NUM_OBSTACLES):
@@ -254,20 +265,21 @@ class StaticObstacleEnv(gym.Env):
         self.obstacle_centre_cos_bearing = []
         self.obstacle_centre_sin_bearing = []
 
-        self.alt_difference = []
             
         self.ac_hdg = bs.traf.hdg[ac_idx]
         self.ac_tas = bs.traf.tas[ac_idx]
 
-        agent_altitude = bs.traf.alt[ac_idx]
-        #print(f"thing = {bs.traf.selvs[ac_idx]}")
-        print(f"VS = {bs.traf.vs[ac_idx]}")
-        print(f"altitude = {agent_altitude}")
+        self.altitude = bs.traf.alt[ac_idx]
+        self.vz = bs.traf.vs[ac_idx]
+        self.altitude_differences = []
 
         wpt_qdr, wpt_dis = bs.tools.geo.kwikqdrdist(bs.traf.lat[ac_idx], bs.traf.lon[ac_idx], self.wpt_lat[0], self.wpt_lon[0])
-    
+        self.wpt_alt_dif = self.wpt_alt[0] - self.altitude
+        wpt_dis = np.sqrt(wpt_dis**2 + self.wpt_alt_dif**2)
+
         self.destination_waypoint_distance.append(wpt_dis * NM2KM)
         self.wpt_qdr.append(wpt_qdr)
+
 
         drift = self.ac_hdg - wpt_qdr
         drift = fn.bound_angle_positive_negative_180(drift)
@@ -275,6 +287,9 @@ class StaticObstacleEnv(gym.Env):
         self.destination_waypoint_drift.append(drift)
         self.destination_waypoint_cos_drift.append(np.cos(np.deg2rad(drift)))
         self.destination_waypoint_sin_drift.append(np.sin(np.deg2rad(drift)))
+
+        obs_altitude = np.array([(self.altitude - ALT_MEAN)/ALT_STD])
+        obs_vz = np.array([(self.vz - VZ_MEAN) / VZ_STD])
         
         for obs_idx in range(NUM_OBSTACLES):
             obs_centre_qdr, obs_centre_dis = bs.tools.geo.kwikqdrdist(bs.traf.lat[ac_idx], bs.traf.lon[ac_idx], self.obstacle_centre_lat[obs_idx], self.obstacle_centre_lon[obs_idx])
@@ -286,9 +301,14 @@ class StaticObstacleEnv(gym.Env):
             self.obstacle_centre_distance.append(obs_centre_dis)
             self.obstacle_centre_cos_bearing.append(np.cos(np.deg2rad(bearing)))
             self.obstacle_centre_sin_bearing.append(np.sin(np.deg2rad(bearing)))
-            self.alt_difference.append(agent_altitude - self.obstacle_height[obs_idx])
+
+            self.altitude_differences.append(self.obstacle_height[obs_idx] - self.altitude) # P sure both in in FL
 
         observation = {
+                "altitude": obs_altitude,
+                "altitude_differences": np.array(self.altitude_differences)/MAX_ALTITUDE, # 
+                "vz": obs_vz,
+                "altitude_waypoint_distance": np.array(self.wpt_alt_dif)/WAYPOINT_ALT_MAX,
                 "destination_waypoint_distance": np.array(self.destination_waypoint_distance)/WAYPOINT_DISTANCE_MAX,
                 "destination_waypoint_cos_drift": np.array(self.destination_waypoint_cos_drift),
                 "destination_waypoint_sin_drift": np.array(self.destination_waypoint_sin_drift),
@@ -296,7 +316,6 @@ class StaticObstacleEnv(gym.Env):
                 "restricted_area_distance": np.array(self.obstacle_centre_distance)/WAYPOINT_DISTANCE_MAX,
                 "cos_difference_restricted_area_pos": np.array(self.obstacle_centre_cos_bearing),
                 "sin_difference_restricted_area_pos": np.array(self.obstacle_centre_sin_bearing),
-                "z_r": np.array(self.alt_difference)
             }
 
         return observation
@@ -352,9 +371,11 @@ class StaticObstacleEnv(gym.Env):
         terminate = 0
         for obs_idx in range(NUM_OBSTACLES):
             if bs.tools.areafilter.checkInside(self.obstacle_names[obs_idx], np.array([bs.traf.lat[ac_idx]]), np.array([bs.traf.lon[ac_idx]]), np.array([bs.traf.alt[ac_idx]])):
-                reward += RESTRICTED_AREA_INTRUSION_PENALTY
-                self.crashed = 1
-                terminate = 1
+                # if we are inside, confirm we're at least 5NM above. 
+                if self.obstacle_height[obs_idx] + DISTANCE_MARGIN*(1/NM2KM) > self.altitude: # self.obstacle_height and self.altitude are in NM
+                    reward += RESTRICTED_AREA_INTRUSION_PENALTY
+                    self.crashed = 1
+                    terminate = 1
         return reward, terminate
 
     def _get_action(self,action):
@@ -366,13 +387,17 @@ class StaticObstacleEnv(gym.Env):
 
         bs.stack.stack(f"HDG {'KL001'} {heading_new}")
         bs.stack.stack(f"SPD {'KL001'} {speed_new}")
+
         # The actions are then executed through stack commands;
-        if vs >= 0:
-            bs.traf.selalt[0] = 1000000 # High target altitude to start climb
+        if vs > 0:
+            bs.traf.selalt[0] = MAX_ALTITUDE # High target altitude to start climb
             bs.traf.selvs[0] = vs
         elif vs < 0:
-            bs.traf.selalt[0] = 0 # High target altitude to start descent
+            bs.traf.selalt[0] = 0 # Low target
             bs.traf.selvs[0] = vs
+        elif vs == 0:
+            ac_idx = bs.traf.id2idx("KL001")
+            bs.traf.selalt[0] = bs.traf.alt[ac_idx]
 
     def _render_frame(self):
         if self.window is None and self.render_mode == "human":
@@ -475,33 +500,33 @@ class StaticObstacleEnv(gym.Env):
                 height_text = font.render(f"{height:.0f} ft", True, (255, 255, 255))
                 canvas.blit(height_text, (center_x - 10, center_y - 8))
 
-        # draw target waypoint
         indx = 0
         for lat, lon, reach in zip(self.wpt_lat, self.wpt_lon, self.wpt_reach):
             
+            alt = self.wpt_alt[indx]
             indx += 1
             qdr, dis = bs.tools.geo.kwikqdrdist(screen_coords[0], screen_coords[1], lat, lon)
 
-            circle_x = ((np.sin(np.deg2rad(qdr)) * dis * NM2KM)/MAX_DISTANCE)*self.window_width
-            circle_y = (-(np.cos(np.deg2rad(qdr)) * dis * NM2KM)/MAX_DISTANCE)*self.window_width
+            circle_x = ((np.sin(np.deg2rad(qdr)) * dis * NM2KM) / MAX_DISTANCE) * self.window_width
+            circle_y = (-(np.cos(np.deg2rad(qdr)) * dis * NM2KM) / MAX_DISTANCE) * self.window_width
 
-            color = (255,255,255)
+            color = (255, 255, 255)
 
-            pygame.draw.circle(
-                canvas, 
-                color,
-                (circle_x,circle_y),
-                radius = 4,
-                width = 0
-            )
+            # Draw waypoint circle
+            pygame.draw.circle(canvas, color, (circle_x, circle_y), radius=4, width=0)
+
+            # Draw distance margin circle
+            pygame.draw.circle(canvas, color, (circle_x, circle_y), radius=(DISTANCE_MARGIN / MAX_DISTANCE) * self.window_width, width=2)
+
+            # --- Draw Altitude Label ---
+            alt_text = f"{int(alt)} ft"  # or use another format like f"{alt:.0f} ft"
+            text_surface = font.render(alt_text, True, color)
             
-            pygame.draw.circle(
-                canvas, 
-                color,
-                (circle_x,circle_y),
-                radius = (DISTANCE_MARGIN/MAX_DISTANCE)*self.window_width,
-                width = 2
-            )
+            # Offset the text a bit to the right and above the circle
+            text_offset_x = 10
+            text_offset_y = -10
+            canvas.blit(text_surface, (circle_x + text_offset_x, circle_y + text_offset_y))
+
 
         self.window.blit(canvas, canvas.get_rect())
         
