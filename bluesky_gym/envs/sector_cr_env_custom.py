@@ -21,6 +21,7 @@ POLY_AREA_RANGE = (2400, 3750) # In NM^2 The size of the simulator in nautical m
 CENTER = np.array([51.990426702297746, 4.376124857109851]) # the center golbal coords ofthe simulator
 MIN_ALTITUDE = 0 #
 MAX_ALTITUDE = 1000 # the minimuim altitude in FL (10,000 feet)
+ACTION_2_MS = 12.5  # approx 2500 ft/min
 
 # Aircraft parameters
 AC_SPD = 150 # in knots
@@ -34,6 +35,7 @@ FL2M = 30.48 # flight level to kilometers. So FL350 = 35,000.
 FL2NM = 0.0164579 # flight level to nautical mils
 NM2FL = 60.76
 FL2F = 100 # flight level to feet
+F2M = 0.3048# feet to meters
 
 M2FL = .0328 #M to flight level
 
@@ -161,7 +163,7 @@ class SectorCREnv(gym.Env):
     
     def _check_inside_airspace(self):
         ac_idx = bs.traf.id2idx(ACTOR)
-        if bs.tools.areafilter.checkInside(self.poly_name, np.array([bs.traf.lat[ac_idx]]), np.array([bs.traf.lon[ac_idx]]), np.array([bs.traf.alt[ac_idx]])):
+        if bs.tools.areafilter.checkInside(self.poly_name, np.array([bs.traf.lat[ac_idx]]), np.array([bs.traf.lon[ac_idx]]), np.array([350*FL2M])):
             return False
         else:
             return True
@@ -314,7 +316,7 @@ class SectorCREnv(gym.Env):
         self.sin_track = np.array([])
         self.distances = np.array([])
 
-        self.altitude = bs.traf.alt[ac_idx]
+        self.altitude = bs.traf.alt[ac_idx]*M2FL
         self.vz = bs.traf.vs[ac_idx]
         self.altitude_difference = np.array([])
         self.z_difference_speed = np.array([])
@@ -370,11 +372,11 @@ class SectorCREnv(gym.Env):
 
             self.distances = np.append(self.distances, distances[ac_idx-1])
 
-            alt_dif = bs.traf.alt[ac_idx] - self.altitude
-            vz_dif = bs.traf.vs[ac_idx] - self.vz
+            alt_dif = bs.traf.alt[ac_idx]*M2FL - self.altitude # altitude different in FL
+            vz_dif = bs.traf.vs[ac_idx] - self.vz # make sure these are in the same units and then normalized.
 
-            self.altitude_difference = np.append(alt_dif)
-            self.z_difference_speed = np.append(vz_dif)
+            self.altitude_difference = np.append(self.altitude_difference, alt_dif)
+            self.z_difference_speed = np.append(self.z_difference_speed, vz_dif)
 
 
         obs_altitude = np.array([(self.altitude - ALT_MEAN)/ALT_STD])
@@ -405,7 +407,7 @@ class SectorCREnv(gym.Env):
 
         dh = action[0] * D_HEADING # discrete heading chage. This can only be -1, 1, or 0
         dv = action[1] * D_VELOCITY # how many (meters / second) we wish to add to the speed 
-        vs = action[2]
+        vs = action[2] * ACTION_2_MS
 
         heading_new = fn.bound_angle_positive_negative_180(bs.traf.hdg[bs.traf.id2idx(ACTOR)] + dh)
         speed_new = (bs.traf.cas[bs.traf.id2idx(ACTOR)] + dv) * MpS2Kt #meters / seconds to knots
@@ -414,15 +416,12 @@ class SectorCREnv(gym.Env):
         bs.stack.stack(f"SPD {ACTOR} {speed_new}") # give the desired speed in knots
 
         # The actions are then executed through stack commands;
-        if vs > 0:
-            bs.traf.selalt[0] = MAX_ALTITUDE # High target altitude to start climb
+        if vs >= 0:
+            bs.traf.selalt[0] = MAX_ALTITUDE*FL2F # High target altitude to start climb
             bs.traf.selvs[0] = vs
         elif vs < 0:
             bs.traf.selalt[0] = 0 # Low target
             bs.traf.selvs[0] = vs
-        elif vs == 0:
-            ac_idx = bs.traf.id2idx(ACTOR)
-            bs.traf.selalt[0] = bs.traf.alt[ac_idx]
 
     # this can prob stay the same
     def _check_drift(self):
@@ -493,7 +492,7 @@ class SectorCREnv(gym.Env):
         # Get agent position data
         lat = bs.traf.lat[ac_idx]
         lon = bs.traf.lon[ac_idx]
-        alt = bs.traf.alt[ac_idx]
+        alt = bs.traf.alt[ac_idx]*M2FL
 
         # Format text
         font = pygame.font.Font(None, 24)  # Default font, size 24
@@ -580,7 +579,7 @@ class SectorCREnv(gym.Env):
             # Intruder position data
             lat = bs.traf.lat[int_idx]
             lon = bs.traf.lon[int_idx]
-            alt = bs.traf.alt[int_idx]
+            alt = bs.traf.alt[int_idx]*M2FL
 
             # Small font for intruder data
             tiny_font = pygame.font.Font(None, 14)
@@ -610,7 +609,7 @@ class SectorCREnv(gym.Env):
         ac_idx = bs.traf.id2idx(ACTOR) # the ID of the ownship
         for i in range(self.num_ac-1):
             ac_idx = ac_idx + 1
-            altitude = bs.traf.alt[ac_idx]
+            altitude = bs.traf.alt[ac_idx]*M2FL
             altitudes.append(altitude)
 
         return altitudes
@@ -623,7 +622,7 @@ class SectorCREnv(gym.Env):
             ac_idx = ac_idx + 1
             longitude = bs.traf.lon[ac_idx]
             latitude = bs.traf.lat[ac_idx]
-            altitude = bs.traf.alt[ac_idx]
+            altitude = bs.traf.alt[ac_idx]*M2FL
             position = (longitude, latitude, altitude)
             positions.append(position)
         return positions
@@ -633,9 +632,11 @@ class SectorCREnv(gym.Env):
         ac_idx = bs.traf.id2idx(ACTOR)
         longitude = bs.traf.lon[ac_idx]
         latitude = bs.traf.lat[ac_idx]
-        altitude = bs.traf.alt[ac_idx]
+        altitude = bs.traf.alt[ac_idx]*M2FL
         return (longitude, latitude, altitude)
     
+
+    # NOTE this has the weird bug of after its called, the plane moves downward.
     def move_ownship(self, info):
         # info = [lat,lon,alt,hdg,spd,vspd]
         x = info[0]
@@ -644,10 +645,11 @@ class SectorCREnv(gym.Env):
         heading = info[3]
         spd = info[4]
         vspd = info[5]
-        bs.stack.stack(f"MOVE {ACTOR} {x} {y} {z} {heading} {spd} {vspd}")
-        bs.sim.step()
-        if self.render_mode == "human":              
-            self._render_frame()
+        bs.stack.stack(f"MOVE {'KL001'} {x} {y} {z} {heading} {spd} {vspd}")
+        for i in range(ACTION_FREQUENCY):
+            bs.sim.step()
+        if self.render_mode == "human":           
+            self._render_frame() 
 
     # move all intrudors to the same, specified, longitude, latitude, altitue (in feet)
     def move_all_intrudors(self, info):

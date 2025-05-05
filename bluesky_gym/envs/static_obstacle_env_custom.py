@@ -4,12 +4,16 @@ import pygame
 import bluesky as bs
 from bluesky_gym.envs.common.screen_dummy import ScreenDummy
 import bluesky_gym.envs.common.functions as fn
-from bluesky.tools.aero import kts
+
+## NOTEWORTH ODDIDES
+
+# degrees seems to be counting up counter-clockwise
+# the display has X going up donw and Y going left-right
 
 import gymnasium as gym
 from gymnasium import spaces
 
-DISTANCE_MARGIN = 5 # km
+DISTANCE_MARGIN = 25 # km (make it larger becuase we are hitting a 3D target now)
 ALT_MEAN = 1500
 ALT_STD = 3000
 VZ_MEAN = 0
@@ -25,6 +29,7 @@ WAYPOINT_DISTANCE_MIN = 100 # KM
 WAYPOINT_DISTANCE_MAX = 170 # KM
 
 WAYPOINT_ALT_MAX = 1000 #NM
+ACTION_2_MS = 12.5  # approx 2500 ft/min
 
 OBSTACLE_DISTANCE_MIN = 20 # KM
 OBSTACLE_DISTANCE_MAX = 150 # KM
@@ -38,8 +43,11 @@ INITIAL_ALTITUDE = 100 # In FL
 MAX_ALTITUDE = 1000
 
 NM2KM = 1.852
+NM2F = 60.76
+FL2F = 100
 MpS2Kt = 1.94384
 VMpS2Kt = 1.94384 # TODO investigate what this is
+M2FL = .0328 #M to flight level
 
 ACTION_FREQUENCY = 10
 
@@ -61,24 +69,35 @@ class StaticObstacleEnv(gym.Env):
     """
     metadata = {"render_modes": ["rgb_array","human"], "render_fps": 120}
 
-    def __init__(self, render_mode=None):
+    def __init__(self, render_mode=None, test_mode=False, test_dictionary={}):
+
+        self.test_mode = test_mode
+        self.test_dictionary = test_dictionary
+
         self.window_width = 512 # pixels
         self.window_height = 512 # pixels
         self.window_size = (self.window_width, self.window_height) # Size of the rendered environment
 
+        if self.test_mode and self.test_dictionary["building_mode"][0] == "no_building":
+            self.num_of_obstacles = 0
+        elif self.test_mode and self.test_dictionary["building_mode"][0] == "square":
+            self.num_of_obstacles = 1
+        else:
+            self.num_of_obstacles = NUM_OBSTACLES
+
         self.observation_space = spaces.Dict(
             {
                 "altitude": spaces.Box(-np.inf, np.inf, dtype=np.float64), # ownship vertical speed
-                "altitude_differences": spaces.Box(-np.inf, np.inf, shape = (NUM_OBSTACLES,), dtype=np.float64), # 
+                "altitude_differences": spaces.Box(-np.inf, np.inf, shape = (self.num_of_obstacles,), dtype=np.float64), # 
                 "vz": spaces.Box(-np.inf, np.inf, dtype=np.float64), # ownship vertical speed  
                 "altitude_waypoint_distance": spaces.Box(-np.inf, np.inf, shape = (1,), dtype=np.float64), 
                 "destination_waypoint_distance": spaces.Box(-np.inf, np.inf, shape = (1,), dtype=np.float64),
                 "destination_waypoint_cos_drift": spaces.Box(-np.inf, np.inf, shape = (1,), dtype=np.float64),
                 "destination_waypoint_sin_drift": spaces.Box(-np.inf, np.inf, shape = (1,), dtype=np.float64),
-                "restricted_area_radius": spaces.Box(0, 1, shape = (NUM_OBSTACLES,), dtype=np.float64),
-                "restricted_area_distance": spaces.Box(-np.inf, np.inf, shape = (NUM_OBSTACLES, ), dtype=np.float64),
-                "cos_difference_restricted_area_pos": spaces.Box(-np.inf, np.inf, shape = (NUM_OBSTACLES,), dtype=np.float64),
-                "sin_difference_restricted_area_pos": spaces.Box(-np.inf, np.inf, shape = (NUM_OBSTACLES,), dtype=np.float64),
+                "restricted_area_radius": spaces.Box(0, 1, shape = (self.num_of_obstacles,), dtype=np.float64),
+                "restricted_area_distance": spaces.Box(-np.inf, np.inf, shape = (self.num_of_obstacles, ), dtype=np.float64),
+                "cos_difference_restricted_area_pos": spaces.Box(-np.inf, np.inf, shape = (self.num_of_obstacles,), dtype=np.float64),
+                "sin_difference_restricted_area_pos": spaces.Box(-np.inf, np.inf, shape = (self.num_of_obstacles,), dtype=np.float64),
             }
         )
        
@@ -115,8 +134,7 @@ class StaticObstacleEnv(gym.Env):
         self.crashed = 0
         self.average_drift = np.array([])
 
-        bs.traf.cre('KL001',actype="A320",acspd=AC_SPD, acalt=INITIAL_ALTITUDE)
-
+        bs.traf.cre('KL001', actype="A320", acspd=AC_SPD, acalt=INITIAL_ALTITUDE)
         bs.stack.stack("VNAV KL001 OFF")
 
         # defining screen coordinates
@@ -181,7 +199,7 @@ class StaticObstacleEnv(gym.Env):
     
     # this function builds obstacle_names, obstacle_vertices and obstacle_radius for us. Add obstacle_height
     def _generate_obstacles(self): 
-        # delete existing obstacles from previous episode in BlueSky
+        # Delete existing obstacles from previous episode in BlueSky
         for name in self.obstacle_names:
             bs.tools.areafilter.deleteArea(name)
 
@@ -190,24 +208,67 @@ class StaticObstacleEnv(gym.Env):
         self.obstacle_radius = []
         self.obstacle_height = []
 
-        self._generate_coordinates_centre_obstacles(num_obstacles = NUM_OBSTACLES)
+        # Generate coordinates for center of obstacles
+        self._generate_coordinates_centre_obstacles()
 
-        for i in range(NUM_OBSTACLES):
-            centre_obst = (self.obstacle_centre_lat[i], self.obstacle_centre_lon[i])
-            _, p, R = self._generate_polygon(centre_obst)
-            
-            points = [coord for point in p for coord in point] # Flatten the list of points
-            poly_name = 'restricted_area_' + str(i+1)
-            bs.tools.areafilter.defineArea(poly_name, 'POLY', points)
-            self.obstacle_names.append(poly_name)
+        if self.test_mode and self.test_dictionary.get("building_mode")[0] == "no_building":
+            return
 
-            obstacle_vertices_coordinates = []
-            for k in range(0,len(points),2):
-                obstacle_vertices_coordinates.append([points[k], points[k+1]])
+        if self.test_mode and self.test_dictionary.get("building_mode")[0] == "square":
+            # Define square size in nautical miles (NM)
+            side_length = 10  # fixed side length in NM (example size)
+            half_side = side_length / 2
+
+            # Define square centered at (0, 0) in local coordinates (lat/lon)
+            square_nm = [
+                [-half_side, -half_side],  # Bottom-left
+                [ half_side, -half_side],  # Bottom-right
+                [ half_side,  half_side],  # Top-right
+                [-half_side,  half_side]   # Top-left
+            ]
             
-            self.obstacle_vertices.append(obstacle_vertices_coordinates)
-            self.obstacle_radius.append(R)
-            self.obstacle_height.append(np.random.uniform(0, MAX_ALTITUDE)) # pick a random heigh from 0 - 1000
+            # Store the square coordinates (in NM)
+            self.poly_points = np.array(square_nm)
+            
+            # Calculate the area (in NM²) for the square (optional)
+            self.poly_area = fn.polygon_area(square_nm)
+
+            # Convert the square's local coordinates to lat/lon coordinates
+            square_latlon = [fn.nm_to_latlong(CENTER, point) for point in square_nm]
+            points = [coord for point in square_latlon for coord in point]  # Flatten the list
+
+            # Define the area in BlueSky (use the same name for consistency)
+            bs.tools.areafilter.defineArea('square_building_1', 'POLY', points)
+
+            # Store additional information (optional)
+            self.obstacle_names.append('square_building_1')
+            self.obstacle_vertices.append(square_latlon)
+            self.obstacle_radius.append(side_length)  # Side length can be used as the radius (or modify as needed)
+            self.obstacle_height.append(self.test_dictionary["building_mode"][1])  # Altitude from building mode. Assume its in FL
+
+            return
+
+
+        else:
+            # Generate random obstacles if building mode is not square
+            for i in range(self.num_of_obstacles):
+                centre_obst = (self.obstacle_centre_lat[i], self.obstacle_centre_lon[i])
+                _, p, R = self._generate_polygon(centre_obst)
+                
+                points = [coord for point in p for coord in point]  # Flatten the list of points
+                poly_name = 'restricted_area_' + str(i + 1)
+                bs.tools.areafilter.defineArea(poly_name, 'POLY', points)
+                self.obstacle_names.append(poly_name)
+
+                # Process the obstacle vertices and add them to the list
+                obstacle_vertices_coordinates = []
+                for k in range(0, len(points), 2):
+                    obstacle_vertices_coordinates.append([points[k], points[k + 1]])
+
+                self.obstacle_vertices.append(obstacle_vertices_coordinates)
+                self.obstacle_radius.append(R)
+                self.obstacle_height.append(np.random.uniform(0, MAX_ALTITUDE))  # Random height for each obstacle
+
 
     def _generate_waypoint(self, acid = 'KL001'):
         # original _generate_waypoints function from horizotal_cr_env
@@ -227,8 +288,10 @@ class StaticObstacleEnv(gym.Env):
             wpt_alt = np.random.rand() * WAYPOINT_ALT_MAX
 
             inside_temp = []
-            for j in range(NUM_OBSTACLES):
-                inside_temp.append(bs.tools.areafilter.checkInside(self.obstacle_names[j], np.array([wpt_lat]), np.array([wpt_lon]), np.array([bs.traf.alt[ac_idx]]))[0])
+
+            #TODO double check this
+            for j in range(self.num_of_obstacles):
+                inside_temp.append(bs.tools.areafilter.checkInside(self.obstacle_names[j], np.array([wpt_lat]), np.array([wpt_lon]), np.array([wpt_alt]))[0])
             check_inside_var = any(x == True for x in inside_temp)
       
             if loop_counter > 1000:
@@ -239,11 +302,11 @@ class StaticObstacleEnv(gym.Env):
         self.wpt_alt.append(wpt_alt)
         self.wpt_reach.append(0)
 
-    def _generate_coordinates_centre_obstacles(self, acid = 'KL001', num_obstacles = NUM_OBSTACLES):
+    def _generate_coordinates_centre_obstacles(self, acid = 'KL001'):
         self.obstacle_centre_lat = []
         self.obstacle_centre_lon = []
         
-        for i in range(num_obstacles):
+        for i in range(self.num_of_obstacles):
             obstacle_dis_from_reference = np.random.randint(OBSTACLE_DISTANCE_MIN, OBSTACLE_DISTANCE_MAX)
             obstacle_hdg_from_reference = np.random.randint(0, 360)
             ac_idx = bs.traf.id2idx(acid)
@@ -269,13 +332,15 @@ class StaticObstacleEnv(gym.Env):
         self.ac_hdg = bs.traf.hdg[ac_idx]
         self.ac_tas = bs.traf.tas[ac_idx]
 
-        self.altitude = bs.traf.alt[ac_idx]
+        self.altitude = bs.traf.alt[ac_idx]*M2FL
         self.vz = bs.traf.vs[ac_idx]
         self.altitude_differences = []
 
         wpt_qdr, wpt_dis = bs.tools.geo.kwikqdrdist(bs.traf.lat[ac_idx], bs.traf.lon[ac_idx], self.wpt_lat[0], self.wpt_lon[0])
-        self.wpt_alt_dif = self.wpt_alt[0] - self.altitude
+        self.wpt_alt_dif = abs(self.wpt_alt[0] - self.altitude)
         wpt_dis = np.sqrt(wpt_dis**2 + self.wpt_alt_dif**2)
+
+        print(f"wpt_dis = {wpt_dis}")
 
         self.destination_waypoint_distance.append(wpt_dis * NM2KM)
         self.wpt_qdr.append(wpt_qdr)
@@ -291,7 +356,7 @@ class StaticObstacleEnv(gym.Env):
         obs_altitude = np.array([(self.altitude - ALT_MEAN)/ALT_STD])
         obs_vz = np.array([(self.vz - VZ_MEAN) / VZ_STD])
         
-        for obs_idx in range(NUM_OBSTACLES):
+        for obs_idx in range(self.num_of_obstacles):
             obs_centre_qdr, obs_centre_dis = bs.tools.geo.kwikqdrdist(bs.traf.lat[ac_idx], bs.traf.lon[ac_idx], self.obstacle_centre_lat[obs_idx], self.obstacle_centre_lon[obs_idx])
             obs_centre_dis = obs_centre_dis * NM2KM #KM        
 
@@ -369,10 +434,10 @@ class StaticObstacleEnv(gym.Env):
         ac_idx = bs.traf.id2idx('KL001')
         reward = 0
         terminate = 0
-        for obs_idx in range(NUM_OBSTACLES):
+        for obs_idx in range(self.num_of_obstacles):
             if bs.tools.areafilter.checkInside(self.obstacle_names[obs_idx], np.array([bs.traf.lat[ac_idx]]), np.array([bs.traf.lon[ac_idx]]), np.array([bs.traf.alt[ac_idx]])):
                 # if we are inside, confirm we're at least 5NM above. 
-                if self.obstacle_height[obs_idx] + DISTANCE_MARGIN*(1/NM2KM) > self.altitude: # self.obstacle_height and self.altitude are in NM
+                if self.obstacle_height[obs_idx] > self.altitude: # self.obstacle_height and self.altitude are in NM
                     reward += RESTRICTED_AREA_INTRUSION_PENALTY
                     self.crashed = 1
                     terminate = 1
@@ -381,7 +446,7 @@ class StaticObstacleEnv(gym.Env):
     def _get_action(self,action):
         dh = action[0] * D_HEADING
         dv = action[1] * D_SPEED
-        vs = action[2]
+        vs = action[2] * ACTION_2_MS
         heading_new = fn.bound_angle_positive_negative_180(bs.traf.hdg[bs.traf.id2idx('KL001')] + dh)
         speed_new = (bs.traf.cas[bs.traf.id2idx('KL001')] + dv) * MpS2Kt
 
@@ -389,15 +454,12 @@ class StaticObstacleEnv(gym.Env):
         bs.stack.stack(f"SPD {'KL001'} {speed_new}")
 
         # The actions are then executed through stack commands;
-        if vs > 0:
-            bs.traf.selalt[0] = MAX_ALTITUDE # High target altitude to start climb
+        if vs >= 0:
+            bs.traf.selalt[0] = MAX_ALTITUDE*FL2F # High target altitude to start climb
             bs.traf.selvs[0] = vs
         elif vs < 0:
             bs.traf.selalt[0] = 0 # Low target
             bs.traf.selvs[0] = vs
-        elif vs == 0:
-            ac_idx = bs.traf.id2idx("KL001")
-            bs.traf.selalt[0] = bs.traf.alt[ac_idx]
 
     def _render_frame(self):
         if self.window is None and self.render_mode == "human":
@@ -438,13 +500,13 @@ class StaticObstacleEnv(gym.Env):
         # Get agent position data
         lat = bs.traf.lat[ac_idx]
         lon = bs.traf.lon[ac_idx]
-        alt = bs.traf.alt[ac_idx]
+        alt = bs.traf.alt[ac_idx]*M2FL
 
         # Format text
         font = pygame.font.Font(None, 24)  # Default font, size 24
         lat_text = font.render(f"Lat: {lat:.4f}", True, (0, 0, 0))
         lon_text = font.render(f"Lon: {lon:.4f}", True, (0, 0, 0))
-        alt_text = font.render(f"Alt: {alt:.0f} ft", True, (0, 0, 0))
+        alt_text = font.render(f"Alt: {alt:.0f} FL", True, (0, 0, 0))
 
         # Define box position and size
         padding = 10
@@ -519,7 +581,7 @@ class StaticObstacleEnv(gym.Env):
             pygame.draw.circle(canvas, color, (circle_x, circle_y), radius=(DISTANCE_MARGIN / MAX_DISTANCE) * self.window_width, width=2)
 
             # --- Draw Altitude Label ---
-            alt_text = f"{int(alt)} ft"  # or use another format like f"{alt:.0f} ft"
+            alt_text = f"{int(alt)} FL"  # or use another format like f"{alt:.0f} ft"
             text_surface = font.render(alt_text, True, color)
             
             # Offset the text a bit to the right and above the circle
@@ -536,3 +598,49 @@ class StaticObstacleEnv(gym.Env):
 
     def close(self):
         pass
+
+    # returns [lat, lon,] of the ownship
+    def get_ownship_position(self):
+        ac_idx = bs.traf.id2idx('KL001')
+        longitude = bs.traf.lon[ac_idx]
+        latitude = bs.traf.lat[ac_idx]
+        altitude = bs.traf.alt[ac_idx]*M2FL #bs.traf.alt comes back in meters
+        return (longitude, latitude, altitude)
+    
+    # returns [lat, lon,] of the ownship
+    def get_ownship_heading(self):
+        ac_idx = bs.traf.id2idx('KL001')
+        heading = bs.traf.hdg[ac_idx]
+        return heading
+    
+    def move_ownship(self, info): # this command takes in meters for altitude
+        # info = [lat,lon,alt,hdg,spd,vspd]
+        x = info[0]
+        y = info[1]
+        z = info[2]
+        heading = info[3]
+        spd = info[4]
+        vspd = info[5]
+        bs.stack.stack(f"MOVE {'KL001'} {x} {y} {z} {heading} {spd} {vspd}")
+        for i in range(ACTION_FREQUENCY):
+            bs.sim.step()
+        if self.render_mode == "human":           
+            self._render_frame()
+
+    def move_waypoint(self, info):
+        # info = [lat,lon,alt]
+        x = info[0]
+        y = info[1]
+        z = info[2] # give it in feet. We need it in NM
+        lat, lon = fn.nm_to_latlong(CENTER, [x,y])
+        self.wpt_lat = []
+        self.wpt_lon = []
+        self.wpt_alt = []
+        self.wpt_reach = []
+
+        self.wpt_lat.append(lat)
+        self.wpt_lon.append(lon)
+        self.wpt_alt.append(z)
+        self.wpt_reach.append(0)
+        if self.render_mode == "human":              
+            self._render_frame()
