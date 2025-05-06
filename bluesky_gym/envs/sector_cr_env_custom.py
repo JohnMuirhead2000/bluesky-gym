@@ -43,6 +43,7 @@ NM2M = 1852 # nautical miles to meters
 NM2FT = 6076.12 # Nautical miles to feet. 
 
 INTRUSION_DISTANCE = 5 # NM
+VERTICAL_INTRUSION_RANGE = 10 * FL2M # certical intrusion range is in meters. Its 10 flight levels
 
 # Model parameters
 ACTION_FREQUENCY = 5
@@ -437,10 +438,8 @@ class SectorCREnv(gym.Env):
             int_idx = i+1
             _, flat_dist = bs.tools.geo.kwikqdrdist(bs.traf.lat[ac_idx], bs.traf.lon[ac_idx], bs.traf.lat[int_idx], bs.traf.lon[int_idx])
             vertical_dist = abs(bs.traf.alt[ac_idx] - bs.traf.alt[int_idx]) # vertical_dist is in meters
-            vinnm = vertical_dist * M2FL * FL2NM # vinnm is in meters. Convert to Flight Level. Convert to nautical miles. 
-            int_dis = math.sqrt(flat_dist**2 + vinnm**2)
             
-            if int_dis < INTRUSION_DISTANCE:
+            if flat_dist < INTRUSION_DISTANCE and vertical_dist < VERTICAL_INTRUSION_RANGE:
                 self.total_intrusions += 1
                 reward += INTRUSION_PENALTY
         
@@ -538,10 +537,13 @@ class SectorCREnv(gym.Env):
             heading_end_y = np.sin(np.deg2rad(int_hdg)) * ac_length
 
             int_qdr, int_dis = bs.tools.geo.kwikqdrdist(CENTER[0], CENTER[1], bs.traf.lat[int_idx], bs.traf.lon[int_idx])
-            separation = bs.tools.geo.kwikdist(bs.traf.lat[ac_idx], bs.traf.lon[ac_idx], bs.traf.lat[int_idx], bs.traf.lon[int_idx])
+
+            # this is in 
+            flat_separation = bs.tools.geo.kwikdist(bs.traf.lat[ac_idx], bs.traf.lon[ac_idx], bs.traf.lat[int_idx], bs.traf.lon[int_idx]) 
+            vertical_dist = abs(bs.traf.alt[ac_idx] - bs.traf.alt[int_idx]) # vertical_dist is in meters
 
             # Determine color
-            if separation < INTRUSION_DISTANCE:
+            if flat_separation < INTRUSION_DISTANCE and vertical_dist < VERTICAL_INTRUSION_RANGE:
                 color = (220,20,60)
             else: 
                 color = (80,80,80)

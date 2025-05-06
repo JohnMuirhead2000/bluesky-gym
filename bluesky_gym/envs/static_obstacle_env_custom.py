@@ -340,8 +340,6 @@ class StaticObstacleEnv(gym.Env):
         self.wpt_alt_dif = abs(self.wpt_alt[0] - self.altitude)
         wpt_dis = np.sqrt(wpt_dis**2 + self.wpt_alt_dif**2)
 
-        print(f"wpt_dis = {wpt_dis}")
-
         self.destination_waypoint_distance.append(wpt_dis * NM2KM)
         self.wpt_qdr.append(wpt_qdr)
 
