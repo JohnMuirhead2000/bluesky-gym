@@ -20,8 +20,7 @@ VZ_STD = 5
 POLY_AREA_RANGE = (2400, 3750) # In NM^2 The size of the simulator in nautical miles
 CENTER = np.array([51.990426702297746, 4.376124857109851]) # the center golbal coords ofthe simulator
 MIN_ALTITUDE = 0 #
-MAX_ALTITUDE = 1000 # the minimuim altitude in FL (10,000 feet)
-ACTION_2_MS = 12.5  # approx 2500 ft/min
+ACTION_2_MS = 13.5  # approx 2500 ft/min
 
 # Aircraft parameters
 AC_SPD = 150 # in knots
@@ -44,6 +43,8 @@ NM2FT = 6076.12 # Nautical miles to feet.
 
 INTRUSION_DISTANCE = 5 # NM
 VERTICAL_INTRUSION_RANGE = 100 * FL2M # certical intrusion range is in meters. Its 10 flight levels
+
+MAX_ALTITUDE = 11000  # in meters
 
 # Model parameters
 ACTION_FREQUENCY = 5
@@ -253,6 +254,8 @@ class SectorCREnv(gym.Env):
         max_x = max(self.poly_points[:, 0])
         max_y = max(self.poly_points[:, 1])
         max_z = 750*FL2M # This value has to be in meters. 
+
+        # if we start bove thew simulators max, we have an issue. Simulators max ia 
         
         init_p_latlongalt = []
         
@@ -273,7 +276,9 @@ class SectorCREnv(gym.Env):
         # Actor AC is the only one that has ACTOR as acid. acalt is set to ALTITUDE for all of them. 
         # The alitude should been in FL  (feet * 10,000)
         bs.traf.cre(ACTOR, actype=AC_TYPE, aclat=flat_pos_agent[0], aclon=flat_pos_agent[1], acalt=init_alt_agent, achdg=hdg_agent, acspd=AC_SPD)
-        
+        #bs.traf.swvnav[0] = True # for reasons that cannot and will not be explained, this fixs it
+
+
         for i in range(1, len(init_p_latlongalt)):
             wpt = fn.nm_to_latlong(CENTER, self.wpts[i]) # get the latitude and longitude of the waypoint
             init_pos = init_p_latlongalt[i]
@@ -281,6 +286,7 @@ class SectorCREnv(gym.Env):
             init_alt = init_pos[2]
             hdg = fn.get_hdg(flat_pos, wpt)
             bs.traf.cre(acid=str(i), actype=AC_TYPE, aclat=flat_pos[0], aclon=flat_pos[1], acalt=init_alt, achdg=hdg, acspd=AC_SPD)
+            #bs.traf.swvnav[i] = True # for reasons that cannot and will not be explained, this fixs it
     
     def _get_info(self):
         # Here you implement any additional info that you want to log after an episode
@@ -381,13 +387,15 @@ class SectorCREnv(gym.Env):
             self.z_difference_speed = np.append(self.z_difference_speed, vz_dif) # REMOVED from observation space
 
 
-        obs_altitude = np.array([self.altitude/MAX_ALTITUDE]) # this will always put obs_sltitude between 0 and 1.
+        obs_altitude = np.array([self.altitude/(MAX_ALTITUDE*M2FL)]) # this will always put obs_sltitude between 0 and 1.
         obs_vz = np.array([(self.vz - VZ_MEAN) / VZ_STD])
+
+        print(f"actualt self.vs  = {self.vz}")
 
         observation = {
 
             "altitude":  obs_altitude,
-            "altitude_difference": self.altitude_difference[:NUM_AC_STATE]/MAX_ALTITUDE,
+            "altitude_difference": self.altitude_difference[:NUM_AC_STATE]/(MAX_ALTITUDE*M2FL),
             "vz": obs_vz, 
             "cos(drift)": self.cos_drift,
             "sin(drift)": self.sin_drift,
@@ -418,7 +426,8 @@ class SectorCREnv(gym.Env):
 
         # The actions are then executed through stack commands;
         if vs >= 0:
-            bs.traf.selalt[0] = MAX_ALTITUDE*FL2F # High target altitude to start climb
+            #bs.traf.selalt[0] = MAX_ALTITUDE*FL2F # High target altitude to start climb
+            bs.traf.selalt[0] = 10000000# High target altitude to start climb
             bs.traf.selvs[0] = vs
         elif vs < 0:
             bs.traf.selalt[0] = 0 # Low target
@@ -546,7 +555,7 @@ class SectorCREnv(gym.Env):
             if flat_separation < INTRUSION_DISTANCE and vertical_dist < VERTICAL_INTRUSION_RANGE:
                 color = (220,20,60)
             else:
-                normal_alt = (bs.traf.alt[int_idx]*M2FL) / MAX_ALTITUDE
+                normal_alt = (bs.traf.alt[int_idx]*M2FL) / (MAX_ALTITUDE*M2FL)
                 normal_alt = max(0.0, min(normal_alt, 1.0))  # clamp between 0 and 1
                 # Invert brightness: low alt -> high brightness (255), high alt -> low (e.g., 50)
                 max_brightness = 255
