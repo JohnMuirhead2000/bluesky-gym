@@ -43,7 +43,7 @@ NM2M = 1852 # nautical miles to meters
 NM2FT = 6076.12 # Nautical miles to feet. 
 
 INTRUSION_DISTANCE = 5 # NM
-VERTICAL_INTRUSION_RANGE = 10 * FL2M # certical intrusion range is in meters. Its 10 flight levels
+VERTICAL_INTRUSION_RANGE = 100 * FL2M # certical intrusion range is in meters. Its 10 flight levels
 
 # Model parameters
 ACTION_FREQUENCY = 5
@@ -77,7 +77,6 @@ class SectorCREnv(gym.Env):
                 "altitude": spaces.Box(-np.inf, np.inf, dtype=np.float64), # ownship vertical speed
                 "altitude_difference": spaces.Box(-np.inf, np.inf, shape = (NUM_AC_STATE,), dtype=np.float64), # 
                 "vz": spaces.Box(-np.inf, np.inf, dtype=np.float64), # ownship vertical speed
-                "z_difference_speed": spaces.Box(-np.inf, np.inf, shape = (NUM_AC_STATE,), dtype=np.float64), # difference in vertical speed
                 "cos(drift)": spaces.Box(-1, 1, shape=(1,), dtype=np.float64),
                 "sin(drift)": spaces.Box(-1, 1, shape=(1,), dtype=np.float64),
                 "airspeed": spaces.Box(-1, 1, shape=(1,), dtype=np.float64),
@@ -245,13 +244,15 @@ class SectorCREnv(gym.Env):
         
     def _generate_ac(self) -> None:
         
+
+        # the range on the simulator is 0FL -> 1000FL. Lets make the starting range 250FL -> 750FL
         # Determine bounding box of airspace
         min_x = min(self.poly_points[:, 0])
         min_y = min(self.poly_points[:, 1])
-        min_z = 0 # set the minimum altidude to 0, duh
+        min_z = 250*FL2M # This value has to be in meters. 
         max_x = max(self.poly_points[:, 0])
         max_y = max(self.poly_points[:, 1])
-        max_z = 1000 # arbitrarly set the max to 1000
+        max_z = 750*FL2M # This value has to be in meters. 
         
         init_p_latlongalt = []
         
@@ -377,18 +378,17 @@ class SectorCREnv(gym.Env):
             vz_dif = bs.traf.vs[ac_idx] - self.vz # make sure these are in the same units and then normalized.
 
             self.altitude_difference = np.append(self.altitude_difference, alt_dif)
-            self.z_difference_speed = np.append(self.z_difference_speed, vz_dif)
+            self.z_difference_speed = np.append(self.z_difference_speed, vz_dif) # REMOVED from observation space
 
 
-        obs_altitude = np.array([(self.altitude - ALT_MEAN)/ALT_STD])
+        obs_altitude = np.array([self.altitude/MAX_ALTITUDE]) # this will always put obs_sltitude between 0 and 1.
         obs_vz = np.array([(self.vz - VZ_MEAN) / VZ_STD])
 
         observation = {
 
             "altitude":  obs_altitude,
-            "altitude_difference": self.altitude_difference[:NUM_AC_STATE]/ALT_STD,
+            "altitude_difference": self.altitude_difference[:NUM_AC_STATE]/MAX_ALTITUDE,
             "vz": obs_vz, 
-            "z_difference_speed": self.z_difference_speed[:NUM_AC_STATE],
             "cos(drift)": self.cos_drift,
             "sin(drift)": self.sin_drift,
             "airspeed": (self.airspeed-150)/6,
@@ -545,8 +545,14 @@ class SectorCREnv(gym.Env):
             # Determine color
             if flat_separation < INTRUSION_DISTANCE and vertical_dist < VERTICAL_INTRUSION_RANGE:
                 color = (220,20,60)
-            else: 
-                color = (80,80,80)
+            else:
+                normal_alt = (bs.traf.alt[int_idx]*M2FL) / MAX_ALTITUDE
+                normal_alt = max(0.0, min(normal_alt, 1.0))  # clamp between 0 and 1
+                # Invert brightness: low alt -> high brightness (255), high alt -> low (e.g., 50)
+                max_brightness = 255
+                min_brightness = 50
+                color_val = int(max_brightness - (normal_alt * (max_brightness - min_brightness)))
+                color = (color_val,color_val,color_val)
 
             x_pos = (self.window_width/2)+(np.cos(np.deg2rad(int_qdr))*(int_dis * NM2KM)*px_per_km)
             y_pos = (self.window_height/2)-(np.sin(np.deg2rad(int_qdr))*(int_dis * NM2KM)*px_per_km)
