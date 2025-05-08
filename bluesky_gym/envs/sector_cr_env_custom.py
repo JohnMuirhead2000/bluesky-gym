@@ -35,6 +35,7 @@ FL2NM = 0.0164579 # flight level to nautical mils
 NM2FL = 60.76
 FL2F = 100 # flight level to feet
 F2M = 0.3048# feet to meters
+KM2M = 1000
 
 M2FL = .0328 #M to flight level
 
