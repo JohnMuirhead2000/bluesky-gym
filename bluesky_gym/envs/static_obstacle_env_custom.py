@@ -40,7 +40,7 @@ V_SPEED = 20/3 # kts (check) TODO confirm this value is correct.
 
 AC_SPD = 150 # kts
 INITIAL_ALTITUDE = 100 # In FL
-MAX_ALTITUDE = 1000
+MAX_ALTITUDE = 11000  # in meters
 
 NM2KM = 1.852
 NM2F = 60.76
@@ -267,7 +267,7 @@ class StaticObstacleEnv(gym.Env):
 
                 self.obstacle_vertices.append(obstacle_vertices_coordinates)
                 self.obstacle_radius.append(R)
-                self.obstacle_height.append(np.random.uniform(0, MAX_ALTITUDE))  # Random height for each obstacle
+                self.obstacle_height.append(np.random.uniform(0, MAX_ALTITUDE*M2FL))  # Random height for each obstacle
 
 
     def _generate_waypoint(self, acid = 'KL001'):
@@ -369,7 +369,7 @@ class StaticObstacleEnv(gym.Env):
 
         observation = {
                 "altitude": obs_altitude,
-                "altitude_differences": np.array(self.altitude_differences)/MAX_ALTITUDE, # 
+                "altitude_differences": np.array(self.altitude_differences)/MAX_ALTITUDE*M2FL, # 
                 "vz": obs_vz,
                 "altitude_waypoint_distance": np.array(self.wpt_alt_dif)/WAYPOINT_ALT_MAX,
                 "destination_waypoint_distance": np.array(self.destination_waypoint_distance)/WAYPOINT_DISTANCE_MAX,

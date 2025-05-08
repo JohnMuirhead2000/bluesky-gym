@@ -44,7 +44,7 @@ NM2FT = 6076.12 # Nautical miles to feet.
 INTRUSION_DISTANCE = 5 # NM
 VERTICAL_INTRUSION_RANGE = 100 * FL2M # certical intrusion range is in meters. Its 10 flight levels
 
-MAX_ALTITUDE = 11000  # in meters
+MAX_ALTITUDE = 11000  # in meters, which is about 360 FL
 
 # Model parameters
 ACTION_FREQUENCY = 5
@@ -250,10 +250,10 @@ class SectorCREnv(gym.Env):
         # Determine bounding box of airspace
         min_x = min(self.poly_points[:, 0])
         min_y = min(self.poly_points[:, 1])
-        min_z = 250*FL2M # This value has to be in meters. 
+        min_z = MAX_ALTITUDE*.25 # This value has to be in meters. 
         max_x = max(self.poly_points[:, 0])
         max_y = max(self.poly_points[:, 1])
-        max_z = 750*FL2M # This value has to be in meters. 
+        max_z = MAX_ALTITUDE*.75 # This value has to be in meters. 
 
         # if we start bove thew simulators max, we have an issue. Simulators max ia 
         
@@ -386,11 +386,9 @@ class SectorCREnv(gym.Env):
             self.altitude_difference = np.append(self.altitude_difference, alt_dif)
             self.z_difference_speed = np.append(self.z_difference_speed, vz_dif) # REMOVED from observation space
 
-
+        # self.altitude is in FL. 
         obs_altitude = np.array([self.altitude/(MAX_ALTITUDE*M2FL)]) # this will always put obs_sltitude between 0 and 1.
-        obs_vz = np.array([(self.vz - VZ_MEAN) / VZ_STD])
-
-        print(f"actualt self.vs  = {self.vz}")
+        obs_vz = np.array([(self.vz) / 15])
 
         observation = {
 
@@ -399,14 +397,14 @@ class SectorCREnv(gym.Env):
             "vz": obs_vz, 
             "cos(drift)": self.cos_drift,
             "sin(drift)": self.sin_drift,
-            "airspeed": (self.airspeed-150)/6,
-            "x_r": self.x_r[:NUM_AC_STATE]/13000,
-            "y_r": self.y_r[:NUM_AC_STATE]/13000,
-            "vx_r": self.vx_r[:NUM_AC_STATE]/32,
-            "vy_r": self.vy_r[:NUM_AC_STATE]/66,
+            "airspeed": (self.airspeed-150)/50, # random value selected to normalize
+            "x_r": self.x_r[:NUM_AC_STATE]/20000,
+            "y_r": self.y_r[:NUM_AC_STATE]/20000,
+            "vx_r": self.vx_r[:NUM_AC_STATE]/150, # increase normalization value
+            "vy_r": self.vy_r[:NUM_AC_STATE]/200, # increase normalization value
             "cos(track)": self.cos_track[:NUM_AC_STATE],
             "sin(track)": self.sin_track[:NUM_AC_STATE],
-            "distances": (self.distances[:NUM_AC_STATE]-50000.)/15000.
+            "distances": (self.distances[:NUM_AC_STATE]-50000.)/45000. # was 15, moved to 45 to normalize.
         }
 
         return observation
