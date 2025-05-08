@@ -651,7 +651,6 @@ class SectorCREnv(gym.Env):
         return (longitude, latitude, altitude)
     
 
-    # NOTE this has the weird bug of after its called, the plane moves downward.
     def move_ownship(self, info):
         # info = [lat,lon,alt,hdg,spd,vspd]
         x = info[0]
