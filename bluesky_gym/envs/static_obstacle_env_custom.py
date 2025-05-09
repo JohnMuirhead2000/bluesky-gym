@@ -552,8 +552,11 @@ class StaticObstacleEnv(gym.Env):
                 y_ref = (-np.cos(np.deg2rad(qdr)) * dis) / MAX_DISTANCE * self.window_width
                 points.append((x_ref, y_ref))
 
-            # Draw the obstacle polygon
-            pygame.draw.polygon(canvas, (0, 0, 0), points)
+        
+            height_percent = self.obstacle_height[idx]*(1/M2FL) / MAX_ALTITUDE
+            shade = int((1 - min(max(height_percent, 0), 1)) * 255) 
+            color = (shade, shade, shade)
+            pygame.draw.polygon(canvas, color, points)
 
             # Draw height in the center of the polygon
             if points:
@@ -563,7 +566,7 @@ class StaticObstacleEnv(gym.Env):
 
                 height = self.obstacle_height[idx]  # get height for this obstacle
                 font = pygame.font.Font(None, 16)
-                height_text = font.render(f"{height:.0f} FL", True, (255, 255, 255))
+                height_text = font.render(f"{height:.0f} FL", True, (255, 0, 0))
                 canvas.blit(height_text, (center_x - 10, center_y - 8))
 
         indx = 0
